@@ -14,7 +14,7 @@ COLUMN_NAMES = ['dataset', 'image', 'fer_code', 'neutral', 'happiness',
                 'surprise', 'sadness', 'anger', 'disgust', 'fear', 'contempt',
                 'unknown', 'no-face']
 
-def get_dataset_dict(dataset_dir: str = "Your own dir",
+def get_dataset_dict(dataset_dir: str = r"C:\Users\JAMES FARELL LATANNA\Downloads\Lastchance",
                     fer_file_name: str = 'fer2013.csv',
                     fer_plus_file_name: str = 'fer2013new.csv') -> Dict[str, pd.DataFrame]:
     '''Reads the output data csv (creates it first if it doesn't exist) into a dict.
@@ -52,7 +52,7 @@ def read_dataset_csv(dataset_dir: str = './') -> pd.DataFrame:
     dataset_path = os.path.join(dataset_dir, UNIFIED_DATASET_FILE_NAME)
     return pd.read_csv(dataset_path)
 
-def _generate_dataset_csv(dataset_dir: str = "Your own Directory",
+def _generate_dataset_csv(dataset_dir: str = r"C:\Users\JAMES FARELL LATANNA\Downloads\Lastchance",
                          fer_file_name: str = 'fer2013.csv',
                          fer_plus_file_name: str = 'fer2013new.csv') -> pd.DataFrame:
     '''Generates output dataset csv file out of original fer and fer plus files.
