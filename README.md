@@ -6,7 +6,10 @@ If you want to yield similar results to this project, I suggest to download the 
 FER2013.csv = this file contains only 7 emotions which are happiness, sadness, surprise, anger, disgust, fear and neutral
 FER2013plus = this file has an additional emotions called "contempt". On top of that, the emotion scores for each image are distributed. Meaning that there will not be a definite emotion.
 
+For Example, this is FER2013 labels:
+![My Image](images/FlowChart.jpg)
+
 I will be using pytorch and cnn neural network model since it is best for reading images.
 
-![My Image](images/FlowChart.jpg)
+![Alt Text](images/fer.jpg)
 
