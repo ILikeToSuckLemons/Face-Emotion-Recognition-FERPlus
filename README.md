@@ -26,3 +26,7 @@ I will be using pytorch and CNN neural network models since it is best for readi
 ![My Image](images/FlowChart.jpg)
 
 
+
+![My Image](images/CNN.png)
+
+
