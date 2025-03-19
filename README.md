@@ -13,7 +13,7 @@ For Example, this is the FER2013 labels:
 
 ![Alt Text](images/fer.png)
 
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 While this is the FER2013plus labels:
 
@@ -26,7 +26,19 @@ I will be using pytorch and CNN neural network models since it is best for readi
 ![My Image](images/FlowChart.jpg)
 
 
-
 ![My Image](images/CNN.png)
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Here are the examples of the output:
+
+| Contempt | Neutral | Joy | Sad |
+|----------|---------|-----|-----|
+| ![Contempt](images/Output/Contempt.png) | ![Neutral](images/Output/Neutral.png) | ![Joy](images/Output/joy.png) | ![Sad](images/Output/sad.png) |
+
+
+Not too shabby if you ask me 😂🤣😭💪
+
+
 
 
