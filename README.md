@@ -11,6 +11,13 @@ For Example, this is FER2013 labels:
 
 ![Alt Text](images/fer.png)
 
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+While this is the FER2013plus labels:
+
+
+![My Image](images/ferplus.jpg)
+
 
 I will be using pytorch and cnn neural network model since it is best for reading images.
 
