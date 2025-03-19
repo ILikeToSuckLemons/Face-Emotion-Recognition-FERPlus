@@ -1,4 +1,4 @@
-This is a small project i made to predict facial emotions.
+I made this project to accurately predict people's facial emotion. I yielded over 80% testing accuracy, please follow the repo step by step in order to get similar results
 
 I used the Dataset of the FER2013 and FER2013plus for a better accuracy result.
 If you want to yield similar results to this project, I suggest to download the 2 datasets before continuing.
