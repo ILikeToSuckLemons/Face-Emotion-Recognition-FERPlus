@@ -7,6 +7,8 @@ FER2013.csv = this file contains only 7 emotions which are happiness, sadness, s
 FER2013plus = this file has an additional emotions called "contempt". On top of that, the emotion scores for each image are distributed. Meaning that there will not be a definite emotion.
 
 For Example, this is FER2013 labels:
+
+
 ![Alt Text](images/fer.png)
 
 
