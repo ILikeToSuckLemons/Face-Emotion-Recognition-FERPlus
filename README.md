@@ -37,11 +37,11 @@ Here are the examples of the output:
 | ![Contempt](images/Output/Contempt.png) | ![Neutral](images/Output/Neutral.png) | ![Joy](images/Output/joy.png) | ![Sad](images/Output/sad.png) |
 
 
-Here are the examples of the output:
+Here are the examples of the output of the gif version:
 
-| Neutral | Joy | Sad | Anger |
-|----------|---------|-----|-----|
-| ![Contempt](images/Output/Contempt.png) | ![Neutral](images/Output/Neutral.png) | ![Joy](images/Output/joy.png) | ![Sad](images/Output/sad.png) |
+| Video | 
+|----------|
+| ![VideoGIF](images/Output/FER.gif) |
 
 
 Not too shabby if you ask me 😂🤣😭💪
