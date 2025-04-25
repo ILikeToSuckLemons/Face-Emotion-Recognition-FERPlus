@@ -1,9 +1,0 @@
-streamlit
-cv2
-pytorch
-numpy
-torchvision
-matplotlib
-numpy
-pandas
-seaborn
