@@ -1,7 +1,14 @@
 streamlit==1.41.0
 opencv-python-headless==4.9.0.80  # No libGL dependency
-torch==2.2.1+cpu  # CPU-only version (no CUDA needed)
-torchvision==0.17.1+cpu
+torch==2.2.1  # CPU-only version (no CUDA needed)
+torchvision==0.17.1
 numpy==1.26.0  # Stable version (not numpy 2.0 beta)
 pillow==10.2.0  # For image processing
 tqdm==4.66.2  # Progress bars
+pandas==2.2.3
+pandas-datareader==0.10.0
+matplotlib==3.9.2
+matplotlib-inline==0.1.7
+scikit-learn==1.6.1
+scipy==1.14.1
+seaborn==0.13.2
