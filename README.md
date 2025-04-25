@@ -43,6 +43,12 @@ Here are the examples of the output of the gif version:
 |----------|
 | ![VideoGIF](images/Output/FER.gif) |
 
+| Graph Type | Preview |
+|------------|---------|
+| **Total Emotion Scores** | ![TotalEmotions](images/TotalEmotions.png) |
+| **Emotion Over Time**    | ![EmotionsTime](images/EmotionsTime.png)   |
+
+
 
 Not too shabby if you ask me 😂🤣😭💪
 
