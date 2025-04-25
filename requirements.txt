@@ -1,5 +1,5 @@
 streamlit==1.41.0
-opencv-python-headless==4.9.0.80  # No libGL dependency
+opencv-python==4.11.0.86
 torch==2.2.1  # CPU-only version (no CUDA needed)
 torchvision==0.17.1
 numpy==1.26.0  # Stable version (not numpy 2.0 beta)
