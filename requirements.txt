@@ -1,10 +1,11 @@
 streamlit==1.41.0
-opencv-python==4.11.0.86
-torch==2.2.1  # CPU-only version (no CUDA needed)
+opencv-python==4.5.5.64
+opencv-contrib-python==4.5.5.64
+torch==2.2.1
 torchvision==0.17.1
-numpy==1.26.0  # Stable version (not numpy 2.0 beta)
-pillow==10.2.0  # For image processing
-tqdm==4.66.2  # Progress bars
+numpy==1.24.3
+pillow==10.2.0
+tqdm==4.66.2
 pandas==2.2.3
 pandas-datareader==0.10.0
 matplotlib==3.9.2
