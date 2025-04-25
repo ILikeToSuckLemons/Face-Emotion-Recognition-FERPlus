@@ -1,10 +1,5 @@
 import streamlit as st
-try:
-    import cv2
-except ImportError:
-    import sys
-    !{sys.executable} -m pip install opencv-python-headless==4.9.0.80
-    import cv2
+import cv2
 import torch
 import numpy as np
 import torch.nn.functional as F
