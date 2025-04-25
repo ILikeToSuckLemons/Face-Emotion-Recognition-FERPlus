@@ -1,5 +1,4 @@
 streamlit==1.41.0
-opencv-python==4.5.5.64
 opencv-contrib-python==4.5.5.64
 torch==2.2.1
 torchvision==0.17.1
