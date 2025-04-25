@@ -19,7 +19,6 @@ debugpy==1.8.5
 decorator==5.1.1
 diffusers==0.31.0
 executing==2.1.0
-face_recognition_models==0.3.0
 filelock==3.16.1
 flatbuffers==25.2.10
 fonttools==4.54.1
@@ -64,7 +63,7 @@ narwhals==1.17.0
 nest-asyncio==1.6.0
 networkx==3.2.1
 numpy==2.0.2
-opencv-python==4.11.0.86
+opencv-python-headless==4.11.0.86
 opt_einsum==3.4.0
 optree==0.14.0
 packaging==24.1
