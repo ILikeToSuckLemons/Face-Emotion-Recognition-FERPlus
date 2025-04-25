@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 # Import your custom modules
 from models import PerformanceModel
-from emotionoverlay import EmotionOverlay
+from gifoverlay import GifEmotionOverlay
 
 # App title and description
 st.title("Facial Emotion Recognition")
@@ -18,6 +18,20 @@ st.write("Upload an image or use your webcam to detect emotions in real-time!")
 # Sidebar for app controls
 st.sidebar.header("Settings")
 detection_mode = st.sidebar.radio("Choose Detection Mode", ["Upload Image", "Webcam"])
+
+# Performance settings
+if 'enable_gif' not in st.session_state:
+    st.session_state.enable_gif = True
+if 'process_every_n_frames' not in st.session_state:
+    st.session_state.process_every_n_frames = 2
+if 'frame_scale' not in st.session_state:
+    st.session_state.frame_scale = 0.75
+
+# Performance settings in sidebar
+st.sidebar.subheader("Performance Settings")
+st.session_state.enable_gif = st.sidebar.checkbox("Enable GIF Overlay", value=st.session_state.enable_gif)
+st.session_state.process_every_n_frames = st.sidebar.slider("Process every N frames", 1, 5, st.session_state.process_every_n_frames)
+st.session_state.frame_scale = st.sidebar.slider("Frame Scale", 0.5, 1.0, st.session_state.frame_scale, 0.05)
 
 # Define emotions list
 emotions = ["Neutral", "Happy", "Surprise", "Sad", "Angry", "Disgust", "Fear", "Contempt"]
@@ -30,29 +44,44 @@ if "emotion_over_time" not in st.session_state:
     st.session_state.animation_offset = 0
     st.session_state.offset_direction = 1
     st.session_state.should_plot = False
+    st.session_state.color_index = 0
+    st.session_state.frame_count = 0
+    st.session_state.last_prediction = None
 
-# Define emotion colors
+# Define emotion colors for OpenCV (BGR in 0-255 range)
 emotion_colors = {
-    "Neutral": (255, 255, 255),
-    "Happy": (0, 255, 255),
-    "Surprise": (0, 165, 255),
-    "Sad": (255, 0, 0),
-    "Angry": (0, 0, 255),
-    "Disgust": (128, 0, 128),
-    "Fear": (255, 255, 0),
-    "Contempt": (0, 255, 0)
+    "Neutral": (255, 255, 255),  # White
+    "Happy": (0, 255, 255),      # Yellow
+    "Surprise": (0, 165, 255),   # Orange
+    "Sad": (255, 0, 0),          # Blue
+    "Angry": (0, 0, 255),        # Red
+    "Disgust": (128, 0, 128),    # Purple
+    "Fear": (255, 255, 0),       # Cyan
+    "Contempt": (0, 255, 0)      # Green
 }
 
-# Define emotion text colors
+# Define emotion colors for matplotlib (RGB in 0-1 range)
+emotion_colors_mpl = {
+    "Neutral": (0.7, 0.7, 0.7),     # White
+    "Happy": (1.0, 1.0, 0.0),       # Yellow
+    "Surprise": (1.0, 0.65, 0.0),   # Orange
+    "Sad": (0.0, 0.0, 1.0),         # Blue
+    "Angry": (1.0, 0.0, 0.0),       # Red
+    "Disgust": (0.5, 0.0, 0.5),     # Purple
+    "Fear": (0.0, 1.0, 1.0),        # Cyan
+    "Contempt": (0.0, 1.0, 0.0)     # Green
+}
+
+# Define emotion text colors (simplified to single colors for performance)
 emotion_text_colors = {
-    "Neutral": [(255,255,255), (224,212,196), (228,203,179)],
-    "Happy": [(182,110,68), (76,235,253), (83,169,242)],
-    "Surprise": [(247,255,0), (42,42,165), (232,206,0)],
-    "Sad": [(194,105,3), (228,172,32), (237,202,162)],
-    "Angry": [(61, 57, 242), (49,121,249), (232,220,214)],
-    "Disgust": [(70,190,77), (120,159,6), (100,55,124)],
-    "Fear": [(198, 128, 134), (133,71,68), (80,45,98)],
-    "Contempt": [(160, 134, 72), (145, 180, 250), (173, 217, 251)]
+    "Neutral": (128, 128, 128),
+    "Happy": (76, 235, 253),
+    "Surprise": (247, 255, 0),
+    "Sad": (194, 105, 3),
+    "Angry": (61, 57, 242),
+    "Disgust": (70, 190, 77),
+    "Fear": (198, 128, 134),
+    "Contempt": (160, 134, 72)
 }
 
 # Load model function - @st.cache_resource prevents reloading on every rerun
@@ -64,10 +93,10 @@ def load_model():
     model.eval()
     return model, device
 
-# Load emotion overlay
+# Load GIF emotion overlay
 @st.cache_resource
-def load_emotion_overlay():
-    return EmotionOverlay("emojiImages/")
+def load_gif_overlay():
+    return GifEmotionOverlay("EmojiGif/")
 
 # Get face detector
 @st.cache_resource
@@ -83,80 +112,119 @@ def predict_emotion(face_tensor, model):
         top_emotion = emotions[top_emotion_idx]
     return probs, top_emotion, top_emotion_idx
 
-# Process image function
-def process_image(img, model, device, face_detector, overlay, animation_offset=0):
+# Process image function - optimized version
+def process_image(img, model, device, face_detector, gif_overlay=None):
+    # Scale down image for faster processing
+    scale = st.session_state.frame_scale
+    if scale != 1.0:
+        img_small = cv2.resize(img, (0, 0), fx=scale, fy=scale)
+    else:
+        img_small = img.copy()
+    
     # Convert to RGB for display
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     
     # Convert to grayscale for face detection
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(img_small, cv2.COLOR_BGR2GRAY)
     
-    # Detect faces
-    faces = face_detector.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(48, 48))
+    # Detect faces with optimized parameters
+    faces = face_detector.detectMultiScale(
+        gray, 
+        scaleFactor=1.3,  # Slightly increased for speed
+        minNeighbors=3,   # Reduced for better detection rate
+        minSize=(int(48 * scale), int(48 * scale))
+    )
+    
+    detected_faces = []
+    # Scale back face coordinates to original image size
+    if scale != 1.0:
+        faces_original = [(int(x/scale), int(y/scale), int(w/scale), int(h/scale)) for (x, y, w, h) in faces]
+    else:
+        faces_original = faces
+    
+    # Store last prediction for smoother display
+    probs = None
+    top_emotion = None
+    top_emotion_idx = None
     
     # Process each face
-    for (x, y, w, h) in faces:
-        # Extract and preprocess face
-        face_img = gray[y:y+h, x:x+w]
-        face_img = cv2.resize(face_img, (48, 48))
+    for (x, y, w, h) in faces_original:
+        # Extract and preprocess face from the small image
+        face_roi = gray[int(y*scale):int((y+h)*scale), int(x*scale):int((x+w)*scale)]
+        if face_roi.size == 0:
+            continue
+            
+        # Resize to model input size
+        face_img = cv2.resize(face_roi, (48, 48))
         face_tensor = torch.tensor(face_img, dtype=torch.float32).div(255).sub(0.5).div(0.5).unsqueeze(0).unsqueeze(0).to(device)
         
         # Get prediction
         probs, top_emotion, top_emotion_idx = predict_emotion(face_tensor, model)
+        st.session_state.last_prediction = (probs, top_emotion, top_emotion_idx)
         
-        # Apply emotion overlay
-        img_rgb = cv2.cvtColor(overlay.overlay_image(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR), 
-                                                   top_emotion, x, y, w, h, animation_offset), 
-                              cv2.COLOR_BGR2RGB)
+        # Store detected face info
+        detected_faces.append((x, y, w, h, top_emotion, probs))
+        
+        # Apply GIF overlay conditionally
+        if gif_overlay and st.session_state.enable_gif:
+            animation_offset = st.session_state.animation_offset
+            img_with_overlay = gif_overlay.overlay_gif(
+                cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR), 
+                top_emotion, x, y, w, h, animation_offset
+            )
+            img_rgb = cv2.cvtColor(img_with_overlay, cv2.COLOR_BGR2RGB)
         
         # Draw rectangle around face
         color = emotion_colors.get(top_emotion, (255, 255, 255))
         color_rgb = (color[2], color[1], color[0])  # Convert BGR to RGB
         cv2.rectangle(img_rgb, (x, y), (x+w, y+h), color_rgb, 2)
         
-        # Use color cycling for the top emotion
-        color_index = int(time.time() * 0.1) % 3
-        
-        # Display emotion probabilities
+        # Display ALL emotion probabilities - removed filtering condition
         for i, (emotion, prob) in enumerate(zip(emotions, probs)):
-            # Choose text color
+        # Choose text color
             if i == top_emotion_idx:
-                text_color = emotion_text_colors[top_emotion][color_index]
-                # Convert BGR to RGB
-                text_color = (text_color[2], text_color[1], text_color[0])
+                text_color = emotion_text_colors[top_emotion]
+                text_color = (text_color[2], text_color[1], text_color[0])  # BGR to RGB
             else:
-                text_color = (255, 255, 255)
-                
+                text_color = (255, 255, 255)  # White for other emotions
+
             text = f"{emotion}: {int(prob * 100)}%"
-            cv2.putText(img_rgb, text, (x, y-10-(i*20)), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+            
+            # Position text to the LEFT of the face with padding
+            text_width = len(text) * 10  # Approximate width of text
+            text_x = max(10, x - text_width - 15)  # Left-align with padding (15px from face)
+            text_y = y + 20 + (i * 20)  # Vertical stacking
+            
+            # Ensure text doesn't go off-screen (top/bottom)
+            if 0 <= text_y < img_rgb.shape[0]:
+                cv2.putText(img_rgb, text, (text_x, text_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)
     
-    return img_rgb, faces
+    return img_rgb, detected_faces
 
-# Create function to update emotion over time
-def update_emotion_data(frame, model, device, face_detector):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces_detected = face_detector.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(48, 48))
-    
-    if len(faces_detected) > 0:
-        (x, y, w, h) = faces_detected[0]  # Just take the first face for tracking
-        face_img = gray[y:y+h, x:x+w]
-        face_img = cv2.resize(face_img, (48, 48))
-        face_tensor = torch.tensor(face_img, dtype=torch.float32).div(255).sub(0.5).div(0.5).unsqueeze(0).unsqueeze(0).to(device)
+# Update emotion data from detection results
+def update_emotion_data(faces_info):
+    if faces_info and len(faces_info) > 0:
+        # Take the first face for tracking
+        _, _, _, _, _, probs = faces_info[0]
         
-        with torch.no_grad():
-            outputs = model(face_tensor)
-            probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
-
         for i, emotion in enumerate(emotions):
             st.session_state.emotion_over_time[emotion].append(probs[i])
-
+        
         st.session_state.frame_timestamps.append(len(st.session_state.frame_timestamps))
 
 # Function to generate and display plots
 def generate_plots():
     # Only generate plots if we have data
     if len(st.session_state.frame_timestamps) > 0:
+        # Calculate the dominant emotion for each frame
+        dominant_emotions = []
+        for i in range(len(st.session_state.frame_timestamps)):
+            frame_emotions = {emotion: st.session_state.emotion_over_time[emotion][i] 
+                            if i < len(st.session_state.emotion_over_time[emotion]) else 0 
+                            for emotion in emotions}
+            dominant_emotions.append(max(frame_emotions, key=frame_emotions.get))
+        
         # Plot 1: Total Emotion Scores
         emotion_totals = {
             emotion: sum(st.session_state.emotion_over_time[emotion])
@@ -164,7 +232,9 @@ def generate_plots():
         }
 
         fig1, ax1 = plt.subplots(figsize=(8, 5))
-        ax1.bar(emotion_totals.keys(), emotion_totals.values(), color='skyblue')
+        # Use matplotlib color format (0-1 range)
+        bars = ax1.bar(emotion_totals.keys(), emotion_totals.values(), 
+                       color=[emotion_colors_mpl[e] for e in emotions])
         ax1.set_title("Total Emotion Scores (Summed Over Time)")
         ax1.set_xlabel("Emotion")
         ax1.set_ylabel("Total Score")
@@ -176,7 +246,10 @@ def generate_plots():
         # Plot 2: Emotion Scores Over Time
         fig2, ax2 = plt.subplots(figsize=(12, 6))
         for emotion, scores in st.session_state.emotion_over_time.items():
-            ax2.plot(st.session_state.frame_timestamps[:len(scores)], scores, label=emotion, linewidth=1.5)
+            # Use matplotlib color format (0-1 range)
+            rgb_color = emotion_colors_mpl[emotion]
+            ax2.plot(st.session_state.frame_timestamps[:len(scores)], scores, 
+                    label=emotion, linewidth=1.5, color=rgb_color)
 
         ax2.set_title("Emotion Scores Over Time")
         ax2.set_xlabel("Frame Number")
@@ -185,6 +258,40 @@ def generate_plots():
         ax2.grid(True, linestyle='--', alpha=0.5)
         plt.tight_layout()
         st.pyplot(fig2)
+        
+        # Plot 3: Dominant Emotion Timeline
+        fig3, ax3 = plt.subplots(figsize=(12, 4))
+        unique_emotions = list(set(dominant_emotions))
+        emotion_indices = {emotion: i for i, emotion in enumerate(unique_emotions)}
+        
+        # Create a scatter plot for dominant emotions
+        for i, emotion in enumerate(dominant_emotions):
+            # Use matplotlib color format (0-1 range)
+            rgb_color = emotion_colors_mpl[emotion]
+            ax3.scatter(st.session_state.frame_timestamps[i], emotion_indices[emotion], 
+                       color=rgb_color, s=50, label=emotion if emotion not in ax3.get_legend_handles_labels()[1] else "")
+        
+        # Connect points with lines
+        emotion_idx_values = [emotion_indices[emotion] for emotion in dominant_emotions]
+        ax3.plot(st.session_state.frame_timestamps, emotion_idx_values, color='gray', alpha=0.3)
+        
+        ax3.set_yticks(range(len(unique_emotions)))
+        ax3.set_yticklabels(unique_emotions)
+        ax3.set_title("Dominant Emotion Timeline")
+        ax3.set_xlabel("Frame Number")
+        ax3.grid(True, linestyle='--', alpha=0.3)
+        
+        # Use a legend without duplicates
+        handles, labels = [], []
+        for h, l in zip(*ax3.get_legend_handles_labels()):
+            if l not in labels:
+                handles.append(h)
+                labels.append(l)
+        if handles:
+            ax3.legend(handles, labels, loc="upper right")
+            
+        plt.tight_layout()
+        st.pyplot(fig3)
     else:
         st.warning("No emotion data collected yet. Please run the webcam first.")
 
@@ -196,14 +303,14 @@ if detection_mode == "Upload Image":
         # Load model and face detector
         model, device = load_model()
         face_detector = load_face_detector()
-        overlay = load_emotion_overlay()
+        gif_overlay = load_gif_overlay()
         
         # Convert uploaded file to image
         file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
         img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
         
         # Process image
-        result_img, faces = process_image(img, model, device, face_detector, overlay)
+        result_img, faces = process_image(img, model, device, face_detector, gif_overlay)
         
         # Display result
         st.image(result_img, caption="Processed Image", use_container_width=True)
@@ -217,7 +324,7 @@ elif detection_mode == "Webcam":
     # Load model and face detector
     model, device = load_model()
     face_detector = load_face_detector()
-    overlay = load_emotion_overlay()
+    gif_overlay = load_gif_overlay()
     
     # Create webcam container
     webcam_container = st.container()
@@ -238,13 +345,15 @@ elif detection_mode == "Webcam":
         # Clear previous data when starting new session
         st.session_state.emotion_over_time = {emotion: [] for emotion in emotions}
         st.session_state.frame_timestamps = []
+        st.session_state.color_index = 0
+        st.session_state.frame_count = 0
     
     if stop_button:
         st.session_state.run_webcam = False
         st.session_state.should_plot = True
     
     # Placeholder for webcam feed
-    webcam_placeholder = webcam_container.empty()
+    frame_window = webcam_container.empty()
     
     # Run webcam if enabled
     if st.session_state.run_webcam:
@@ -255,41 +364,49 @@ elif detection_mode == "Webcam":
         else:
             st.info("Webcam is active! Click 'Stop Webcam' when done.")
             
-            # Use a loop with short sleep to update the frame
-            while st.session_state.run_webcam:
-                ret, frame = cap.read()
-                
-                if not ret:
-                    st.error("Failed to capture frame from webcam!")
-                    break
-                
-                # Update animation offset
-                st.session_state.animation_offset += st.session_state.offset_direction * 2
-                if abs(st.session_state.animation_offset) > 10:
-                    st.session_state.offset_direction *= -1
-                
-                # Process frame
-                result_frame, faces = process_image(frame, model, device, face_detector, 
-                                                   overlay, st.session_state.animation_offset)
-                
-                # Update emotion data
-                update_emotion_data(frame, model, device, face_detector)
-                
-                # Display frame - Fix for deprecated parameter
-                webcam_placeholder.image(result_frame, channels="RGB", use_container_width=True)
-                
-                # Short delay to prevent UI freezing
-                time.sleep(0.1)
-            
-            # Release the webcam when stopped
-            cap.release()
+            # Use a more efficient webcam processing loop
+            try:
+                while st.session_state.run_webcam:
+                    ret, frame = cap.read()
+                    
+                    if not ret:
+                        st.error("Failed to capture frame from webcam!")
+                        break
+                    
+                    # Process frame based on counter for performance
+                    if st.session_state.frame_count % st.session_state.process_every_n_frames == 0:
+                        # Update animation offset (simpler pattern)
+                        st.session_state.animation_offset = (st.session_state.animation_offset + 1) % 10
+                        
+                        # Process frame - full processing
+                        result_frame, faces = process_image(frame, model, device, face_detector, gif_overlay)
+                        
+                        # Update emotion data if faces found
+                        if faces:
+                            update_emotion_data(faces)
+                    else:
+                        # For skipped frames, just display with previous detection
+                        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        result_frame = img_rgb  # Simple display for skipped frames
+                    
+                    # Display the frame
+                    frame_window.image(result_frame, channels="RGB", use_container_width=True)
+                    
+                    # Increment frame counter
+                    st.session_state.frame_count += 1
+                    
+                    # Very minimal sleep - just enough to prevent UI freezing
+                    time.sleep(0.03)  # Reduced from 0.1
+            finally:
+                # Always release the webcam when done
+                cap.release()
     
     # Generate plots after webcam stops
     if st.session_state.should_plot:
         st.subheader("Emotion Analysis Results")
         generate_plots()
     elif not st.session_state.run_webcam:
-        webcam_placeholder.info("Click 'Start Webcam' to begin face emotion detection.")
+        frame_window.info("Click 'Start Webcam' to begin face emotion detection.")
 
 # Add information about the project
 st.sidebar.markdown("---")
@@ -314,8 +431,8 @@ st.code("""
 emotion_recognition/
 ├── app.py                   # This Streamlit file
 ├── models.py                # Your model architecture file
-├── emotionoverlay.py        # Your overlay handling code
+├── gifoverlay.py            # Your GIF overlay handling code
 ├── model/
 │   └── ferplus_model_pd_acc.pth  # Your trained model
-└── emojiImages/             # Folder with emoji images
+└── EmojiGif/                # Folder with emoji GIF images
 """)
