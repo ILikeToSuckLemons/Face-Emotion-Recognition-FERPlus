@@ -1,14 +1,7 @@
 streamlit==1.41.0
-opencv-contrib-python==4.5.5.64
+opencv-python-headless==4.9.0.80
 torch==2.2.1
 torchvision==0.17.1
-numpy==1.24.3
+numpy==1.26.0
 pillow==10.2.0
 tqdm==4.66.2
-pandas==2.2.3
-pandas-datareader==0.10.0
-matplotlib==3.9.2
-matplotlib-inline==0.1.7
-scikit-learn==1.6.1
-scipy==1.14.1
-seaborn==0.13.2
