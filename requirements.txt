@@ -9,4 +9,3 @@ tqdm==4.66.2
 matplotlib==3.9.2
 matplotlib-inline==0.1.7
 pyav==14.3.0
-streamlit-webrtc==0.62.4
