@@ -4,13 +4,13 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 from torchvision import transforms
-import time
 import tempfile
 import os
 from PIL import Image
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
-# Set page config first before any other Streamlit commands
-st.set_page_config(page_title="Emotion Recognition", layout="wide")
+# Set page config first
+st.set_page_config(page_title="Real-Time Emotion Recognition", layout="wide")
 
 # Define the PerformanceModel class (since you need this from your original models.py)
 class PerformanceModel(torch.nn.Module):
@@ -55,177 +55,201 @@ class PerformanceModel(torch.nn.Module):
         
         return x
 
-# Simple EmotionOverlay class (simplified from your emotionoverlay.py)
-class EmotionOverlay:
+# Initialize session state variables
+if 'model' not in st.session_state:
+    st.session_state.model = None
+if 'device' not in st.session_state:
+    st.session_state.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if 'emotions' not in st.session_state:
+    st.session_state.emotions = ["Neutral", "Happy", "Surprise", "Sad", "Angry", "Disgust", "Fear", "Contempt"]
+if 'face_cascade' not in st.session_state:
+    st.session_state.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+if 'transform' not in st.session_state:
+    st.session_state.transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize((48, 48)),
+        transforms.Normalize(mean=[0.5], std=[0.5])
+    ])
+if 'detection_frequency' not in st.session_state:
+    st.session_state.detection_frequency = 3
+if 'confidence_threshold' not in st.session_state:
+    st.session_state.confidence_threshold = 0.5
+if 'frame_count' not in st.session_state:
+    st.session_state.frame_count = 0
+
+# Define emotion colors
+emotion_colors = {
+    "Neutral": (255, 255, 255),    # White
+    "Happy": (0, 255, 255),        # Yellow
+    "Surprise": (0, 165, 255),     # Orange
+    "Sad": (255, 0, 0),            # Blue
+    "Angry": (0, 0, 255),          # Red
+    "Disgust": (128, 0, 128),      # Purple
+    "Fear": (255, 255, 0),         # Cyan
+    "Contempt": (0, 255, 0)        # Green
+}
+
+# WebRTC video processor for real-time processing
+class VideoProcessor(VideoProcessorBase):
     def __init__(self):
-        # Define emotion colors
-        self.emotion_colors = {
-            "Neutral": (255, 255, 255),  # White
-            "Happy": (0, 255, 255),      # Yellow
-            "Surprise": (0, 165, 255),   # Orange
-            "Sad": (255, 0, 0),          # Blue
-            "Angry": (0, 0, 255),        # Red
-            "Disgust": (128, 0, 128),    # Purple
-            "Fear": (255, 255, 0),       # Cyan
-            "Contempt": (0, 255, 0)      # Green
-        }
-    
-    def overlay(self, frame, emotion, x, y, w, h):
-        # Draw rectangle with emotion color
-        color = self.emotion_colors.get(emotion, (255, 255, 255))
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-        return frame
+        self.faces = []
+        self.frame_count = 0
+        
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        
+        # Update frame count
+        self.frame_count += 1
+        
+        # Convert to grayscale for face detection
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Run face detection based on frequency
+        if self.frame_count % st.session_state.detection_frequency == 0:
+            self.faces = st.session_state.face_cascade.detectMultiScale(
+                gray, 
+                scaleFactor=1.2, 
+                minNeighbors=5, 
+                minSize=(48, 48)
+            )
+        
+        # Process each detected face
+        for (x, y, w, h) in self.faces:
+            face_img = gray[y:y + h, x:x + w]
+            face_img = cv2.resize(face_img, (48, 48))
+            
+            # Convert to tensor
+            face_tensor = st.session_state.transform(face_img).unsqueeze(0).to(st.session_state.device)
+            
+            # Run model inference
+            if st.session_state.model:
+                with torch.no_grad():
+                    outputs = st.session_state.model(face_tensor)
+                    probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
+                    top_emotion_idx = np.argmax(probs)
+                    top_emotion = st.session_state.emotions[top_emotion_idx]
+                    top_prob = probs[top_emotion_idx]
+                
+                # Only display if confidence exceeds threshold
+                if top_prob >= st.session_state.confidence_threshold:
+                    # Draw rectangle with emotion color
+                    color = emotion_colors.get(top_emotion, (255, 255, 255))
+                    cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+                    
+                    # Display emotion text
+                    text = f"{top_emotion}: {int(top_prob * 100)}%"
+                    cv2.putText(img, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Add frame counter
+        cv2.putText(img, f"Frame: {self.frame_count}", (10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        return frame.from_ndarray(img)
 
-# Main app function
 def main():
-    st.title("Facial Emotion Recognition")
+    st.title("Real-Time Facial Emotion Recognition")
     
-    # Sidebar for app controls
+    # Sidebar configuration
     st.sidebar.header("Settings")
-    detection_frequency = st.sidebar.slider("Detection Frequency", 1, 10, 3, 
-                                           help="How often to run face detection (frames)")
-    confidence_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5, 
-                                            help="Minimum confidence to display emotion")
-
+    
+    # Update detection frequency
+    st.session_state.detection_frequency = st.sidebar.slider(
+        "Detection Frequency (frames)", 
+        1, 10, st.session_state.detection_frequency,
+        help="How often to run face detection. Higher values improve performance."
+    )
+    
+    # Update confidence threshold
+    st.session_state.confidence_threshold = st.sidebar.slider(
+        "Confidence Threshold", 
+        0.0, 1.0, st.session_state.confidence_threshold,
+        help="Minimum confidence to display an emotion"
+    )
+    
     # App explanation
     with st.expander("About this app"):
         st.write("""
-        This app detects facial emotions in real-time using a deep learning model.
+        This app performs real-time facial emotion recognition using WebRTC for low-latency video processing.
         It can recognize 8 emotions: Neutral, Happy, Surprise, Sad, Angry, Disgust, Fear, and Contempt.
+        
+        For the best performance:
+        - Use Google Chrome or Firefox
+        - Adjust the detection frequency based on your device's performance
+        - Make sure your face is well-lit
         """)
-    
-    # Check if model exists in temp dir, if not explain upload
-    model_upload_placeholder = st.empty()
-    model_status = st.empty()
-
-    # Detect device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_status.info(f"Using device: {device}")
     
     # Model upload section
     uploaded_model = st.sidebar.file_uploader("Upload model file (ferplus_model_pd_acc.pth)", type=["pth"])
+    model_status = st.empty()
     
+    # Load model if uploaded
     if uploaded_model:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pth') as tmp_file:
             tmp_file.write(uploaded_model.getvalue())
             model_path = tmp_file.name
             
-        # Load model
         try:
-            model = PerformanceModel(input_shape=(1, 48, 48), n_classes=8, logits=True).to(device)
-            model.load_state_dict(torch.load(model_path, map_location=device))
-            model.eval()
-            model_status.success("Model loaded successfully!")
+            st.session_state.model = PerformanceModel(
+                input_shape=(1, 48, 48), 
+                n_classes=8, 
+                logits=True
+            ).to(st.session_state.device)
+            
+            st.session_state.model.load_state_dict(
+                torch.load(model_path, map_location=st.session_state.device)
+            )
+            st.session_state.model.eval()
+            model_status.success(f"Model loaded successfully! Using {st.session_state.device}")
         except Exception as e:
             model_status.error(f"Error loading model: {e}")
-            return
+            st.session_state.model = None
     else:
-        model_upload_placeholder.warning("Please upload your model file to continue")
-        return
+        model_status.warning("Please upload your model file to continue")
     
-    # Emotion categories
-    emotions = ["Neutral", "Happy", "Surprise", "Sad", "Angry", "Disgust", "Fear", "Contempt"]
+    # App modes
+    app_mode = st.sidebar.selectbox("Choose the app mode", ["Real-Time WebRTC", "Upload Image"])
     
-    # Initialize emotion overlay
-    emotion_overlay = EmotionOverlay()
-    
-    # Transform for face preprocessing
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize((48, 48)),
-        transforms.Normalize(mean=[0.5], std=[0.5])
-    ])
-
-    # Main app modes
-    app_mode = st.sidebar.selectbox("Choose the app mode", ["Webcam", "Upload Image"])
-    
-    if app_mode == "Webcam":
-        # Webcam input
-        st.subheader("Webcam Live Feed")
+    if app_mode == "Real-Time WebRTC":
+        st.subheader("Live Webcam Feed (WebRTC)")
         
-        run_webcam = st.checkbox("Start Webcam")
+        # Check if model is loaded
+        if st.session_state.model is None:
+            st.warning("Please upload a model before starting the webcam")
+            return
         
-        # Placeholder for video frame and stats
-        frame_placeholder = st.empty()
-        stats_placeholder = st.empty()
+        # Configure WebRTC
+        rtc_configuration = RTCConfiguration(
+            {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        )
         
-        # OpenCV face detector
-        haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        # Start WebRTC streamer
+        webrtc_ctx = webrtc_streamer(
+            key="emotion-detection",
+            video_processor_factory=VideoProcessor,
+            rtc_configuration=rtc_configuration,
+            media_stream_constraints={"video": True, "audio": False},
+        )
         
-        frame_count = 0
-        start_time = time.time()
-        faces = []
+        # Instructions
+        if webrtc_ctx.video_processor:
+            st.info("Webcam is active! Make sure you allow camera access.")
         
-        # Webcam capture
-        if run_webcam:
-            vid = cv2.VideoCapture(0)
-            
-            if not vid.isOpened():
-                st.error("Could not open webcam. Please check your camera settings.")
-                return
-                
-            while run_webcam:
-                ret, frame = vid.read()
-                if not ret:
-                    st.error("Failed to get frame from webcam")
-                    break
-                
-                # Process every frame, but detect faces based on frequency setting
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                
-                if frame_count % detection_frequency == 0:
-                    faces = haar_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(48, 48))
-                
-                frame_count += 1
-                
-                for (x, y, w, h) in faces:
-                    # Extract and preprocess face
-                    face_img = gray[y:y + h, x:x + w]
-                    face_img = cv2.resize(face_img, (48, 48))
-                    
-                    # Convert to tensor using transform
-                    face_tensor = transform(face_img).unsqueeze(0).to(device)
-                    
-                    # Run model inference
-                    with torch.no_grad():
-                        outputs = model(face_tensor)
-                        probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
-                        top_emotion_idx = np.argmax(probs)
-                        top_emotion = emotions[top_emotion_idx]
-                        top_prob = probs[top_emotion_idx]
-                    
-                    if top_prob >= confidence_threshold:
-                        # Add overlay to the frame
-                        frame = emotion_overlay.overlay(frame, top_emotion, x, y, w, h)
-                        
-                        # Display emotion text
-                        text = f"{top_emotion}: {int(top_prob * 100)}%"
-                        cv2.putText(frame, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                
-                # Calculate and display FPS
-                elapsed_time = time.time() - start_time
-                fps = frame_count / elapsed_time
-                
-                # Add FPS counter to frame
-                cv2.putText(frame, f"FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                
-                # Convert to RGB for Streamlit
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                # Display the frame
-                frame_placeholder.image(frame, channels="RGB", use_column_width=True)
-                
-                # Display stats
-                stats_placeholder.text(f"FPS: {fps:.2f}, Frames processed: {frame_count}")
-                
-                # Add a small sleep to prevent high CPU usage
-                time.sleep(0.01)
-            
-            # Release resources when stopped
-            vid.release()
+        # Add statistics display
+        if webrtc_ctx.state.playing:
+            st.subheader("Detection Stats")
+            stats_cols = st.columns(2)
+            with stats_cols[0]:
+                st.metric("Device", f"{st.session_state.device}")
+            with stats_cols[1]:
+                st.metric("Detection Frequency", f"Every {st.session_state.detection_frequency} frames")
     
     elif app_mode == "Upload Image":
         st.subheader("Image Upload")
+        
+        # Check if model is loaded
+        if st.session_state.model is None:
+            st.warning("Please upload a model before processing images")
+            return
         
         uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
         
@@ -251,9 +275,13 @@ def main():
                 # Convert to grayscale for face detection
                 gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
                 
-                # OpenCV face detector
-                haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-                faces = haar_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(48, 48))
+                # Detect faces
+                faces = st.session_state.face_cascade.detectMultiScale(
+                    gray, 
+                    scaleFactor=1.1, 
+                    minNeighbors=5, 
+                    minSize=(48, 48)
+                )
                 
                 # Create a copy of the image for results
                 result_image = image_bgr.copy()
@@ -263,34 +291,42 @@ def main():
                 else:
                     st.write(f"Found {len(faces)} face(s)")
                     
+                    all_emotions = []
+                    
                     for (x, y, w, h) in faces:
                         # Extract and preprocess face
                         face_img = gray[y:y + h, x:x + w]
                         face_img = cv2.resize(face_img, (48, 48))
                         
                         # Convert to tensor
-                        face_tensor = transform(face_img).unsqueeze(0).to(device)
+                        face_tensor = st.session_state.transform(face_img).unsqueeze(0).to(st.session_state.device)
                         
                         # Run model inference
                         with torch.no_grad():
-                            outputs = model(face_tensor)
+                            outputs = st.session_state.model(face_tensor)
                             probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
-                            
-                        # Display all emotions and probabilities in a horizontal bar chart
-                        emotion_results = {emotion: float(prob) for emotion, prob in zip(emotions, probs)}
-                        emotion_df = {"Emotion": list(emotion_results.keys()), 
-                                     "Probability": list(emotion_results.values())}
                         
                         # Get top emotion
                         top_emotion_idx = np.argmax(probs)
-                        top_emotion = emotions[top_emotion_idx]
+                        top_emotion = st.session_state.emotions[top_emotion_idx]
+                        top_prob = probs[top_emotion_idx]
                         
-                        # Add overlay to result image
-                        result_image = emotion_overlay.overlay(result_image, top_emotion, x, y, w, h)
+                        # Store results
+                        all_emotions.append({
+                            "face_id": len(all_emotions) + 1,
+                            "emotion": top_emotion,
+                            "confidence": top_prob,
+                            "all_probs": probs
+                        })
                         
-                        # Add text with top emotion
-                        text = f"{top_emotion}: {int(probs[top_emotion_idx] * 100)}%"
-                        cv2.putText(result_image, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                        # Draw rectangle with emotion color
+                        color = emotion_colors.get(top_emotion, (255, 255, 255))
+                        cv2.rectangle(result_image, (x, y), (x + w, y + h), color, 2)
+                        
+                        # Add text with top emotion and face ID
+                        text = f"Face #{len(all_emotions)}: {top_emotion} ({int(top_prob * 100)}%)"
+                        cv2.putText(result_image, text, (x, y - 10), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
                     
                     # Convert back to RGB for display
                     result_rgb = cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)
@@ -298,21 +334,20 @@ def main():
                     # Display result image
                     st.image(result_rgb, caption="Detection Result", use_column_width=True)
                     
-                    # Show emotion probabilities
-                    st.subheader("Emotion Probabilities")
-                    for emotion, prob in zip(emotions, probs):
-                        st.write(f"{emotion}: {prob:.4f}")
-                    
-                    # Create a horizontal bar chart of emotions
-                    emotion_data = [[emotion, float(prob)] for emotion, prob in zip(emotions, probs)]
-                    emotion_data.sort(key=lambda x: x[1], reverse=True)
-                    
-                    # Use Streamlit's native chart
-                    chart_data = {
-                        "Emotion": [item[0] for item in emotion_data],
-                        "Probability": [item[1] for item in emotion_data]
-                    }
-                    st.bar_chart(chart_data, x="Emotion", y="Probability")
+                    # Show detailed results for each face
+                    for face_data in all_emotions:
+                        with st.expander(f"Face #{face_data['face_id']} - {face_data['emotion']}"):
+                            # Create columns for metrics
+                            cols = st.columns(2)
+                            cols[0].metric("Top Emotion", face_data['emotion'])
+                            cols[1].metric("Confidence", f"{face_data['confidence']:.2%}")
+                            
+                            # Show all emotions as bar chart
+                            emotion_data = {
+                                "Emotion": st.session_state.emotions,
+                                "Probability": face_data['all_probs']
+                            }
+                            st.bar_chart(emotion_data, x="Emotion", y="Probability")
 
 # Clean up temporary files on app shutdown
 def cleanup():
