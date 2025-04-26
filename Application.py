@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import time
 import threading
+import io
 
 # Import your custom model
 from models import PerformanceModel
@@ -192,8 +193,13 @@ def main():
             
             if camera_image is not None:
                 # Convert camera input to OpenCV format
+                # Convert camera input to RGB format correctly
+                
+
                 bytes_data = camera_image.getvalue()
-                img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+                img_pil = Image.open(io.BytesIO(bytes_data))
+                img = np.array(img_pil)  # Now img is in RGB format
+
                 
                 # Process the image
                 img_rgb, results = process_image(img, model, device, face_detector)
