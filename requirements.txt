@@ -1,11 +1,7 @@
 streamlit
-streamlit-webrtc
 opencv-python-headless
 torch
 torchvision
-numpy
-pillow
-tqdm
 matplotlib
-matplotlib-inline
-pyav
+numpy
+Pillow
