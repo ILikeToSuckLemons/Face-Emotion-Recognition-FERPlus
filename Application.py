@@ -5,7 +5,7 @@ import numpy as np
 import torch.nn.functional as F
 from torchvision import transforms
 import av
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 from models import PerformanceModel
 from emotionoverlay import EmotionOverlay
 from gifoverlay import GifEmotionOverlay
@@ -59,15 +59,16 @@ emotion_colors = {
     "Contempt": (0, 255, 0)  # Green
 }
 
-# Video processor class for WebRTC
-class VideoProcessor(VideoTransformerBase):
+# Updated Video processor class for WebRTC
+class VideoProcessor(VideoProcessorBase):
     def __init__(self):
         self.frame_count = 0
         self.color_index = 0
         self.animation_offset = 0
         self.offset_direction = 1
+        self.faces = []  # Store detected faces
         
-    def transform(self, frame):
+    def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         
         # Process frame (similar to original code)
@@ -79,10 +80,10 @@ class VideoProcessor(VideoTransformerBase):
             
         # Run face detection only every 3 frames
         if self.frame_count % 3 == 0:
-            faces = haar_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(48, 48))
+            self.faces = haar_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(48, 48))
         self.frame_count += 1
         
-        for (x, y, w, h) in faces:
+        for (x, y, w, h) in self.faces:
             face_img = gray[y:y + h, x:x + w]
             face_img = cv2.resize(face_img, (48, 48))
             face_img = np.expand_dims(face_img, axis=0)
@@ -117,7 +118,7 @@ class VideoProcessor(VideoTransformerBase):
                 text = f"{emotion}: {int(prob * 100)}%"
                 cv2.putText(img, text, (x, y - 10 - (i * 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
         
-        return img
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # Configure WebRTC (use STUN servers for cloud deployment)
 rtc_configuration = RTCConfiguration(
@@ -129,7 +130,8 @@ webrtc_ctx = webrtc_streamer(
     key="facial-emotion",
     video_processor_factory=VideoProcessor,
     rtc_configuration=rtc_configuration,
-    media_stream_constraints={"video": True, "audio": False}
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
 )
 
 # Additional information
@@ -141,8 +143,12 @@ with st.expander("About this app"):
     The app overlays emotion-specific GIFs and displays the probability for each emotion.
     """)
 
-# Requirements for requirements.txt (display but hidden in the actual app)
-requirements = """
+# Add requirements.txt info
+st.sidebar.title("Setup Information")
+st.sidebar.markdown("""
+### Requirements
+Make sure you have these packages in your requirements.txt:
+```
 streamlit==1.31.0
 streamlit-webrtc==0.47.1
 opencv-python-headless==4.8.1.78
@@ -150,4 +156,5 @@ torch==2.1.0
 torchvision==0.16.0
 numpy==1.26.0
 av==10.0.0
-"""
+```
+""")
