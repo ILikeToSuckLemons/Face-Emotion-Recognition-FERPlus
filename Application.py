@@ -6,14 +6,14 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from PIL import Image
 import time
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+import threading
 
 # Import your custom model
 from models import PerformanceModel
 
 # App title and description
-st.title("Real-time Facial Emotion Recognition")
-st.write("Allow camera access to detect emotions in real-time!")
+st.title("Facial Emotion Recognition")
+st.write("Use webcam or upload an image to detect emotions!")
 
 # Define emotions list
 emotions = ["Neutral", "Happy", "Surprise", "Sad", "Angry", "Disgust", "Fear", "Contempt"]
@@ -47,7 +47,6 @@ def load_model():
 @st.cache_resource
 def load_face_detector():
     try:
-        # Use LBP cascade for faster detection
         return cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     except Exception as e:
         st.error(f"Error loading face detector: {str(e)}")
@@ -71,7 +70,57 @@ def predict_emotion(face_img, model, device):
         st.error(f"Error predicting emotion: {str(e)}")
         return None, None, None
 
-# Generate emotion probability chart
+# Process image function
+def process_image(img, model, device, face_detector):
+    try:
+        # Convert to RGB for display and grayscale for detection
+        if len(img.shape) == 3:
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        else:
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            gray = img
+        
+        # Detect faces
+        faces = face_detector.detectMultiScale(
+            gray, 
+            scaleFactor=1.1, 
+            minNeighbors=5,
+            minSize=(30, 30)
+        )
+        
+        results = []
+        
+        # Process each detected face
+        for (x, y, w, h) in faces:
+            # Extract face region
+            face_roi = gray[y:y+h, x:x+h]
+            
+            # Resize to model input size
+            face_img = cv2.resize(face_roi, (48, 48))
+            
+            # Predict emotion
+            probs, emotion, emotion_idx = predict_emotion(face_img, model, device)
+            
+            if emotion:
+                # Draw rectangle around face
+                color = emotion_colors.get(emotion, (255, 255, 255))
+                cv2.rectangle(img_rgb, (x, y), (x+w, y+h), color, 2)
+                
+                # Draw emotion label
+                text = f"{emotion}"
+                cv2.putText(img_rgb, text, (x, y-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                
+                # Add to results
+                results.append((x, y, w, h, emotion, probs))
+        
+        return img_rgb, results
+    except Exception as e:
+        st.error(f"Error processing image: {str(e)}")
+        return None, []
+
+# Function to generate emotion probability chart for a face
 def generate_emotion_chart(probs):
     fig, ax = plt.subplots(figsize=(10, 4))
     colors = [emotion_colors.get(emotion, (255, 255, 255)) for emotion in emotions]
@@ -89,77 +138,8 @@ def generate_emotion_chart(probs):
     plt.tight_layout()
     return fig
 
-# Video processor class for webcam
-class EmotionVideoProcessor(VideoProcessorBase):
-    def __init__(self, model, device, face_detector):
-        self.model = model
-        self.device = device
-        self.face_detector = face_detector
-        self.last_emotion = None
-        self.last_probs = None
-        self.frame_count = 0
-        self.last_process_time = time.time()
-        self.process_every_n_frames = 3  # Process every 3rd frame to reduce lag
-        
-    def recv(self, frame):
-        self.frame_count += 1
-        img = frame.to_ndarray(format="bgr24")
-        
-        # Only process every nth frame to reduce lag
-        if self.frame_count % self.process_every_n_frames == 0:
-            current_time = time.time()
-            process_time = current_time - self.last_process_time
-            self.last_process_time = current_time
-            
-            # Convert to grayscale for detection
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            
-            # Detect faces - use scaleFactor to improve performance
-            faces = self.face_detector.detectMultiScale(
-                gray, 
-                scaleFactor=1.2,  # Increase for better performance
-                minNeighbors=4,   # Lower for performance
-                minSize=(30, 30),
-                flags=cv2.CASCADE_SCALE_IMAGE
-            )
-            
-            # Process each detected face
-            for (x, y, w, h) in faces:
-                # Extract face region
-                face_roi = gray[y:y+h, x:x+h]
-                
-                # Resize to model input size
-                face_img = cv2.resize(face_roi, (48, 48))
-                
-                # Predict emotion
-                probs, emotion, emotion_idx = predict_emotion(face_img, self.model, self.device)
-                
-                if emotion:
-                    # Save last emotion and probabilities for display
-                    self.last_emotion = emotion
-                    self.last_probs = probs
-                    
-                    # Draw rectangle around face - directly on BGR image
-                    color_bgr = emotion_colors.get(emotion, (255, 255, 255))
-                    # Convert RGB to BGR for OpenCV
-                    color_bgr = (color_bgr[2], color_bgr[1], color_bgr[0])
-                    cv2.rectangle(img, (x, y), (x+w, y+h), color_bgr, 2)
-                    
-                    # Draw emotion label
-                    text = f"{emotion}"
-                    cv2.putText(img, text, (x, y-10), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_bgr, 2)
-        
-        # Return the frame directly without extra conversion
-        return frame.from_ndarray(img)
-
 # Main app
 def main():
-    # Add sidebar settings
-    st.sidebar.title("Performance Settings")
-    processing_rate = st.sidebar.slider("Processing rate", 1, 10, 3, 
-                                     help="Higher values = better performance but lower detection rate")
-    
     # Load model and face detector
     model, device = load_model()
     face_detector = load_face_detector()
@@ -169,51 +149,77 @@ def main():
         return
     
     # Tabs for different input methods
-    tab1, tab2 = st.tabs(["Real-time Webcam", "Upload Image"])
+    tab1, tab2 = st.tabs(["Camera", "Upload Image"])
     
     with tab1:
-        st.header("Real-time Emotion Detection")
+        st.header("Camera Emotion Detection")
         
-        # Create WebRTC streamer with STUN servers for Streamlit Cloud
-        rtc_config = RTCConfiguration(
-            {"iceServers": [
-                {"urls": ["stun:stun.l.google.com:19302"]},
-                {"urls": ["stun:stun1.l.google.com:19302"]},
-                {"urls": ["stun:stun2.l.google.com:19302"]}
-            ]}
-        )
+        # Create a camera capture section
+        st.write("Click 'Start Camera' to begin emotion detection.")
         
-        # Create video processor
-        processor = EmotionVideoProcessor(model, device, face_detector)
-        processor.process_every_n_frames = processing_rate  # Apply user setting
-        
-        # Create WebRTC streamer with improved settings
-        webrtc_ctx = webrtc_streamer(
-            key="emotion-detection",
-            video_processor_factory=lambda: processor,
-            rtc_configuration=rtc_config,
-            media_stream_constraints={
-                "video": {
-                    "width": {"ideal": 640},
-                    "height": {"ideal": 480},
-                    "frameRate": {"ideal": 30}
-                },
-                "audio": False
-            },
-            async_processing=True,  # Process frames asynchronously
-        )
-        
-        # Create placeholder for emotion chart
+        # Create placeholders
+        start_button = st.button("Start Camera")
+        stop_button = st.button("Stop Camera")
+        frame_placeholder = st.empty()
+        status_placeholder = st.empty()
+        emotion_placeholder = st.empty()
         chart_placeholder = st.empty()
         
-        # Update chart when streaming is active
-        if webrtc_ctx.state.playing and processor.last_probs is not None:
-            chart = generate_emotion_chart(processor.last_probs)
-            chart_placeholder.pyplot(chart)
+        # Session state for camera control
+        if 'camera_running' not in st.session_state:
+            st.session_state.camera_running = False
             
-            # Display detected emotion
-            if processor.last_emotion:
-                st.info(f"Current emotion: {processor.last_emotion}")
+        if 'current_emotion' not in st.session_state:
+            st.session_state.current_emotion = None
+            
+        if 'current_probs' not in st.session_state:
+            st.session_state.current_probs = None
+            
+        # Handle start button
+        if start_button:
+            st.session_state.camera_running = True
+            
+        # Handle stop button
+        if stop_button:
+            st.session_state.camera_running = False
+            
+        # Camera capture and processing
+        if st.session_state.camera_running:
+            status_placeholder.info("Camera is starting... If no video appears, check your browser permissions.")
+            
+            # Use streamlit's camera_input for simplicity
+            camera_image = st.camera_input("Take a picture for emotion detection", key="emotion_camera")
+            
+            if camera_image is not None:
+                # Convert camera input to OpenCV format
+                bytes_data = camera_image.getvalue()
+                img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+                
+                # Process the image
+                img_rgb, results = process_image(img, model, device, face_detector)
+                
+                if img_rgb is not None:
+                    # Display processed image
+                    frame_placeholder.image(img_rgb, caption="Detected Emotions", use_column_width=True)
+                    
+                    # Display results
+                    if len(results) == 0:
+                        status_placeholder.warning("No faces detected in the image.")
+                    else:
+                        status_placeholder.success(f"Detected {len(results)} face(s) in the image.")
+                        
+                        # Store and display the first face's emotion
+                        if results:
+                            st.session_state.current_emotion = results[0][4]
+                            st.session_state.current_probs = results[0][5]
+                            
+                            emotion_placeholder.info(f"Current emotion: {st.session_state.current_emotion}")
+                            
+                            # Create and display chart
+                            fig = generate_emotion_chart(st.session_state.current_probs)
+                            chart_placeholder.pyplot(fig)
+        else:
+            status_placeholder.info("Camera is stopped. Click 'Start Camera' to begin.")
     
     with tab2:
         st.header("Upload Image")
@@ -226,60 +232,58 @@ def main():
             file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
             img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
             
-            # Convert to RGB for display and grayscale for detection
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            # Process the image
+            img_rgb, results = process_image(img, model, device, face_detector)
             
-            # Detect faces
-            faces = face_detector.detectMultiScale(
-                gray, 
-                scaleFactor=1.1, 
-                minNeighbors=5,
-                minSize=(30, 30)
-            )
-            
-            results = []
-            
-            # Process each detected face
-            for (x, y, w, h) in faces:
-                # Extract face region
-                face_roi = gray[y:y+h, x:x+h]
+            if img_rgb is not None:
+                # Display processed image
+                st.image(img_rgb, caption="Detected Emotions", use_column_width=True)
                 
-                # Resize to model input size
-                face_img = cv2.resize(face_roi, (48, 48))
-                
-                # Predict emotion
-                probs, emotion, emotion_idx = predict_emotion(face_img, model, device)
-                
-                if emotion:
-                    # Draw rectangle around face
-                    color = emotion_colors.get(emotion, (255, 255, 255))
-                    cv2.rectangle(img_rgb, (x, y), (x+w, y+h), color, 2)
+                # Display results
+                if len(results) == 0:
+                    st.warning("No faces detected in the image!")
+                else:
+                    st.success(f"Detected {len(results)} face(s) in the image!")
                     
-                    # Draw emotion label
-                    text = f"{emotion}"
-                    cv2.putText(img_rgb, text, (x, y-10), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
-                    
-                    # Add to results
-                    results.append((x, y, w, h, emotion, probs))
-            
-            # Display the image with emotion detection
-            st.image(img_rgb, caption="Detected Emotions", use_column_width=True)
-            
-            # Check if faces were detected
-            if len(results) == 0:
-                st.warning("No faces detected in the image!")
-            else:
-                st.success(f"Detected {len(results)} face(s) in the image!")
+                    # Display emotion probabilities for each face
+                    for i, (_, _, _, _, emotion, probs) in enumerate(results):
+                        st.subheader(f"Face #{i+1} - {emotion}")
+                        
+                        # Create and display chart
+                        fig = generate_emotion_chart(probs)
+                        st.pyplot(fig)
+
+    # Setup for snapshot mode
+    st.sidebar.title("Settings")
+    st.sidebar.markdown("### Snapshot Mode")
+    
+    # Checkbox to enable auto-refresh snapshots
+    if st.sidebar.checkbox("Enable auto snapshots (experimental)", value=False):
+        interval = st.sidebar.slider("Snapshot interval (seconds)", 2, 10, 3)
+        st.sidebar.info(f"Page will automatically capture snapshots every {interval} seconds")
+        
+        # Add auto-refresh JavaScript
+        st.markdown(
+            f"""
+            <script>
+                function takeSnapshot() {{
+                    const captureButton = document.querySelector('.stCamera button');
+                    if (captureButton) {{
+                        captureButton.click();
+                    }}
+                }}
                 
-                # Display emotion probabilities for each face
-                for i, (_, _, _, _, emotion, probs) in enumerate(results):
-                    st.subheader(f"Face #{i+1} - {emotion}")
-                    
-                    # Create and display chart
-                    fig = generate_emotion_chart(probs)
-                    st.pyplot(fig)
+                // Set interval for auto snapshots
+                const interval = setInterval(takeSnapshot, {interval * 1000});
+                
+                // Cleanup on page change/reload
+                window.addEventListener('beforeunload', function() {{
+                    clearInterval(interval);
+                }});
+            </script>
+            """,
+            unsafe_allow_html=True
+        )
 
 if __name__ == "__main__":
     main()
