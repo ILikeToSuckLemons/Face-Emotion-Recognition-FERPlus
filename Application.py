@@ -13,7 +13,6 @@ import time
 import matplotlib.pyplot as plt
 import pandas as pd
 
-
 # Set page config
 st.set_page_config(page_title="Real-time Facial Emotion Recognition", layout="wide")
 st.title("Real-time Facial Emotion Recognition")
@@ -38,6 +37,12 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.5], std=[0.5])
 ])
 gif_overlay = GifEmotionOverlay("EmojiGif/")
+
+# Initialize session state variables
+if 'emotion_scores' not in st.session_state:
+    st.session_state.emotion_scores = {emotion: 0 for emotion in emotions}
+if 'emotion_data' not in st.session_state:
+    st.session_state.emotion_data = []
 
 # Emotion color definitions
 emotion_text_colors = {
@@ -155,10 +160,15 @@ class VideoProcessor(VideoProcessorBase):
                 text_color = emotion_text_colors[top_emotion][self.color_index]
                 text = f"{top_emotion}: {int(probs[top_emotion_idx] * 100)}%"
                 cv2.putText(img, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+            
+            # Store emotion data
+            st.session_state.emotion_data.append(probs)
+            for i, emotion in enumerate(emotions):
+                st.session_state.emotion_scores[emotion] += probs[i]
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-
+# When Stop Camera is clicked
 if st.button('Stop Camera'):
     # Plot Bar Graph of Total Emotion Score
     st.subheader("Total Emotion Scores")
