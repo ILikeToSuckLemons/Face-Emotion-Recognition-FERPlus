@@ -8,7 +8,7 @@ from models import PerformanceModel
 from emotionoverlay import EmotionOverlay  # If you still want the static overlay
 from gifoverlay import GifEmotionOverlay
 from PIL import Image
-import tempfile
+import time
 
 # Load model and setup
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -58,57 +58,66 @@ frame_count = 0
 animation_offset = 0
 offset_direction = 1
 
-# Camera input from user
-img_file_buffer = st.camera_input("Take a picture")
+# Camera input from user (Real-time processing simulation)
+stframe = st.empty()  # Create a container for video frame updates
 
-if img_file_buffer is not None:
-    # Read image
-    image = Image.open(img_file_buffer)
-    frame = np.array(image)
-    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # Convert PIL Image to OpenCV BGR
+# Real-time video processing loop (simulate frame update)
+while True:
+    img_file_buffer = st.camera_input("Start Webcam")
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    if img_file_buffer is not None:
+        # Read image from camera
+        image = Image.open(img_file_buffer)
+        frame = np.array(image)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # Convert PIL Image to OpenCV BGR
 
-    # Change color every 10 frames
-    if frame_count % 10 == 0:
-        color_index = (color_index + 1) % 3
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    faces = haar_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(48, 48))
-    frame_count += 1
+        # Change color every 10 frames
+        if frame_count % 10 == 0:
+            color_index = (color_index + 1) % 3
 
-    for (x, y, w, h) in faces:
-        face_img = gray[y:y + h, x:x + w]
-        face_img = cv2.resize(face_img, (48, 48))
-        face_img = np.expand_dims(face_img, axis=0)
-        face_tensor = torch.tensor(face_img, dtype=torch.float32).div(255).sub(0.5).div(0.5).unsqueeze(0).to(device)
+        faces = haar_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(48, 48))
+        frame_count += 1
 
-        with torch.no_grad():
-            outputs = model(face_tensor)
-            probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
-            top_emotion_idx = np.argmax(probs)
-            top_emotion = emotions[top_emotion_idx]
+        for (x, y, w, h) in faces:
+            face_img = gray[y:y + h, x:x + w]
+            face_img = cv2.resize(face_img, (48, 48))
+            face_img = np.expand_dims(face_img, axis=0)
+            face_tensor = torch.tensor(face_img, dtype=torch.float32).div(255).sub(0.5).div(0.5).unsqueeze(0).to(device)
 
-        # Floating animation
-        animation_offset += offset_direction * 2
-        if abs(animation_offset) > 10:
-            offset_direction *= -1
+            with torch.no_grad():
+                outputs = model(face_tensor)
+                probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
+                top_emotion_idx = np.argmax(probs)
+                top_emotion = emotions[top_emotion_idx]
 
-        # Overlay gif
-        frame = gif_overlay.overlay_gif(frame, top_emotion, x, y, w, h, animation_offset)
+            # Floating animation
+            animation_offset += offset_direction * 2
+            if abs(animation_offset) > 10:
+                offset_direction *= -1
 
-        # Draw rectangle
-        box_color = emotion_colors.get(top_emotion, (255, 255, 255))
-        cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 2)
+            # Overlay gif
+            frame = gif_overlay.overlay_gif(frame, top_emotion, x, y, w, h, animation_offset)
 
-        # Emotion labels
-        for i, (emotion, prob) in enumerate(zip(emotions, probs)):
-            if i == top_emotion_idx:
-                text_color = emotion_text_colors[top_emotion][color_index]
-            else:
-                text_color = (255, 255, 255)
-            text = f"{emotion}: {int(prob * 100)}%"
-            cv2.putText(frame, text, (x, y - 10 - (i * 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+            # Draw rectangle
+            box_color = emotion_colors.get(top_emotion, (255, 255, 255))
+            cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 2)
 
-    # Convert frame back to RGB for display
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    st.image(frame, channels="RGB")
+            # Emotion labels
+            for i, (emotion, prob) in enumerate(zip(emotions, probs)):
+                if i == top_emotion_idx:
+                    text_color = emotion_text_colors[top_emotion][color_index]
+                else:
+                    text_color = (255, 255, 255)
+                text = f"{emotion}: {int(prob * 100)}%"
+                cv2.putText(frame, text, (x, y - 10 - (i * 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+
+        # Convert frame back to RGB for Streamlit
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Display the frame in real-time within the Streamlit app
+        stframe.image(frame, channels="RGB", use_column_width=True)
+
+    # Introduce a small delay (0.1 seconds) to simulate continuous video feed
+    time.sleep(0.1)
