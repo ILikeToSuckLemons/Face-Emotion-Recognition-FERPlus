@@ -6,7 +6,6 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from PIL import Image
 import time
-import threading
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
 # Import your custom model
@@ -48,6 +47,7 @@ def load_model():
 @st.cache_resource
 def load_face_detector():
     try:
+        # Use LBP cascade for faster detection
         return cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     except Exception as e:
         st.error(f"Error loading face detector: {str(e)}")
@@ -97,51 +97,69 @@ class EmotionVideoProcessor(VideoProcessorBase):
         self.face_detector = face_detector
         self.last_emotion = None
         self.last_probs = None
+        self.frame_count = 0
+        self.last_process_time = time.time()
+        self.process_every_n_frames = 3  # Process every 3rd frame to reduce lag
         
     def recv(self, frame):
+        self.frame_count += 1
         img = frame.to_ndarray(format="bgr24")
         
-        # Convert to RGB for display and grayscale for detection
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Detect faces
-        faces = self.face_detector.detectMultiScale(
-            gray, 
-            scaleFactor=1.1, 
-            minNeighbors=5,
-            minSize=(30, 30)
-        )
-        
-        # Process each detected face
-        for (x, y, w, h) in faces:
-            # Extract face region
-            face_roi = gray[y:y+h, x:x+h]
+        # Only process every nth frame to reduce lag
+        if self.frame_count % self.process_every_n_frames == 0:
+            current_time = time.time()
+            process_time = current_time - self.last_process_time
+            self.last_process_time = current_time
             
-            # Resize to model input size
-            face_img = cv2.resize(face_roi, (48, 48))
+            # Convert to grayscale for detection
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             
-            # Predict emotion
-            probs, emotion, emotion_idx = predict_emotion(face_img, self.model, self.device)
+            # Detect faces - use scaleFactor to improve performance
+            faces = self.face_detector.detectMultiScale(
+                gray, 
+                scaleFactor=1.2,  # Increase for better performance
+                minNeighbors=4,   # Lower for performance
+                minSize=(30, 30),
+                flags=cv2.CASCADE_SCALE_IMAGE
+            )
             
-            if emotion:
-                # Save last emotion and probabilities for display
-                self.last_emotion = emotion
-                self.last_probs = probs
+            # Process each detected face
+            for (x, y, w, h) in faces:
+                # Extract face region
+                face_roi = gray[y:y+h, x:x+h]
                 
-                # Draw rectangle around face
-                color = emotion_colors.get(emotion, (255, 255, 255))
-                cv2.rectangle(img_rgb, (x, y), (x+w, y+h), color, 2)
+                # Resize to model input size
+                face_img = cv2.resize(face_roi, (48, 48))
                 
-                # Draw emotion label
-                text = f"{emotion}"
-                cv2.putText(img_rgb, text, (x, y-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                # Predict emotion
+                probs, emotion, emotion_idx = predict_emotion(face_img, self.model, self.device)
+                
+                if emotion:
+                    # Save last emotion and probabilities for display
+                    self.last_emotion = emotion
+                    self.last_probs = probs
+                    
+                    # Draw rectangle around face - directly on BGR image
+                    color_bgr = emotion_colors.get(emotion, (255, 255, 255))
+                    # Convert RGB to BGR for OpenCV
+                    color_bgr = (color_bgr[2], color_bgr[1], color_bgr[0])
+                    cv2.rectangle(img, (x, y), (x+w, y+h), color_bgr, 2)
+                    
+                    # Draw emotion label
+                    text = f"{emotion}"
+                    cv2.putText(img, text, (x, y-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, color_bgr, 2)
         
-        return frame.from_ndarray(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR))
+        # Return the frame directly without extra conversion
+        return frame.from_ndarray(img)
 
 # Main app
 def main():
+    # Add sidebar settings
+    st.sidebar.title("Performance Settings")
+    processing_rate = st.sidebar.slider("Processing rate", 1, 10, 3, 
+                                     help="Higher values = better performance but lower detection rate")
+    
     # Load model and face detector
     model, device = load_model()
     face_detector = load_face_detector()
@@ -158,18 +176,31 @@ def main():
         
         # Create WebRTC streamer with STUN servers for Streamlit Cloud
         rtc_config = RTCConfiguration(
-            {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+            {"iceServers": [
+                {"urls": ["stun:stun.l.google.com:19302"]},
+                {"urls": ["stun:stun1.l.google.com:19302"]},
+                {"urls": ["stun:stun2.l.google.com:19302"]}
+            ]}
         )
         
         # Create video processor
         processor = EmotionVideoProcessor(model, device, face_detector)
+        processor.process_every_n_frames = processing_rate  # Apply user setting
         
-        # Create WebRTC streamer
+        # Create WebRTC streamer with improved settings
         webrtc_ctx = webrtc_streamer(
             key="emotion-detection",
             video_processor_factory=lambda: processor,
             rtc_configuration=rtc_config,
-            media_stream_constraints={"video": True, "audio": False},
+            media_stream_constraints={
+                "video": {
+                    "width": {"ideal": 640},
+                    "height": {"ideal": 480},
+                    "frameRate": {"ideal": 30}
+                },
+                "audio": False
+            },
+            async_processing=True,  # Process frames asynchronously
         )
         
         # Create placeholder for emotion chart
@@ -179,6 +210,10 @@ def main():
         if webrtc_ctx.state.playing and processor.last_probs is not None:
             chart = generate_emotion_chart(processor.last_probs)
             chart_placeholder.pyplot(chart)
+            
+            # Display detected emotion
+            if processor.last_emotion:
+                st.info(f"Current emotion: {processor.last_emotion}")
     
     with tab2:
         st.header("Upload Image")
