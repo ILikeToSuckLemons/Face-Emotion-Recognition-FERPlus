@@ -214,8 +214,7 @@ webrtc_ctx = webrtc_streamer(
     video_processor_factory=VideoProcessor,
     rtc_configuration=rtc_configuration,
     media_stream_constraints={"video": {"width": {"ideal": 640}, "height": {"ideal": 480}, "frameRate": {"max": 30}}, "audio": False},
-    async_processing=True,
-    on_ended=lambda: setattr(st.session_state, 'camera_active', False)
+    async_processing=True
 )
 
 # When camera is stopped, generate analytics
