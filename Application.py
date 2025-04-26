@@ -341,28 +341,44 @@ elif detection_mode == "Webcam":
             self.animation_offset = 0
             
         def transform(self, frame):
-            img = frame.to_ndarray(format="bgr24")
-            
-            # Process every N frames for better performance
-            if self.frame_count % st.session_state.process_every_n_frames == 0:
-                # Update animation offset
-                self.animation_offset = (self.animation_offset + 1) % 10
-                st.session_state.animation_offset = self.animation_offset
+            try:
+                img = frame.to_ndarray(format="bgr24")
                 
-                # Process frame
-                result_frame, faces = process_image(img, model, device, face_detector, gif_overlay)
+                # Process every N frames for better performance
+                if self.frame_count % st.session_state.process_every_n_frames == 0:
+                    # Update animation offset
+                    self.animation_offset = (self.animation_offset + 1) % 10
+                    st.session_state.animation_offset = self.animation_offset
+                    
+                    # Process frame
+                    result_frame, faces = process_image(img, model, device, face_detector, gif_overlay)
+                    
+                    # Update emotion data if faces found
+                    if faces:
+                        update_emotion_data(faces)
+                else:
+                    # For skipped frames, just convert to RGB directly
+                    result_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 
-                # Update emotion data if faces found
-                if faces:
-                    update_emotion_data(faces)
-            else:
-                # Simple display for skipped frames
-                result_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            
-            # Increment frame counter
-            self.frame_count += 1
-            
-            return av.VideoFrame.from_ndarray(result_frame, format="rgb24")
+                # Increment frame counter
+                self.frame_count += 1
+                
+                # Double-check result_frame is not empty
+                if result_frame is None or result_frame.size == 0:
+                    # Return a fallback frame (black frame with text)
+                    fallback = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(fallback, "Processing...", (20, 240), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    return av.VideoFrame.from_ndarray(fallback, format="rgb24")
+                    
+                return av.VideoFrame.from_ndarray(result_frame, format="rgb24")
+            except Exception as e:
+                print(f"Error in transform: {str(e)}")
+                # Return a fallback frame
+                fallback = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(fallback, "Error processing frame", (20, 240), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                return av.VideoFrame.from_ndarray(fallback, format="rgb24")
     
     # Add columns for buttons
     col1, col2 = st.columns(2)
@@ -387,6 +403,7 @@ elif detection_mode == "Webcam":
         rtc_configuration=rtc_configuration,
         media_stream_constraints={"video": True, "audio": False},
     )
+    st.info("If the webcam appears black, please ensure you've granted camera permissions in your browser.")
     
     # Information about webcam usage
     if not webrtc_ctx.state.playing:
