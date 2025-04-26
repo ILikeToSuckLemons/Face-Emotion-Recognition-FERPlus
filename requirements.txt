@@ -1,4 +1,5 @@
 streamlit==1.41.0
+streamlit-webrtc==0.62.4
 opencv-python-headless==4.9.0.80
 torch==2.2.1
 torchvision==0.17.1
