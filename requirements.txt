@@ -4,6 +4,4 @@ torch
 torchvision
 matplotlib
 numpy
-streamlit-webrtc
-av
-aiortc
+Pillow
