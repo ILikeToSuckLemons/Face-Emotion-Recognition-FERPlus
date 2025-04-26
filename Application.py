@@ -3,17 +3,18 @@ import cv2
 import torch
 import numpy as np
 import torch.nn.functional as F
-from torchvision import transforms
 import matplotlib.pyplot as plt
 from PIL import Image
-import io
+import time
+import threading
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
 # Import your custom model
 from models import PerformanceModel
 
 # App title and description
-st.title("Facial Emotion Recognition")
-st.write("Upload an image to detect emotions!")
+st.title("Real-time Facial Emotion Recognition")
+st.write("Allow camera access to detect emotions in real-time!")
 
 # Define emotions list
 emotions = ["Neutral", "Happy", "Surprise", "Sad", "Angry", "Disgust", "Fear", "Contempt"]
@@ -70,57 +71,7 @@ def predict_emotion(face_img, model, device):
         st.error(f"Error predicting emotion: {str(e)}")
         return None, None, None
 
-# Process uploaded image
-def process_uploaded_image(uploaded_file, model, device, face_detector):
-    try:
-        # Read image from uploaded file
-        file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        
-        # Convert to RGB for display and grayscale for detection
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Detect faces
-        faces = face_detector.detectMultiScale(
-            gray, 
-            scaleFactor=1.1, 
-            minNeighbors=5,
-            minSize=(30, 30)
-        )
-        
-        results = []
-        
-        # Process each detected face
-        for (x, y, w, h) in faces:
-            # Extract face region
-            face_roi = gray[y:y+h, x:x+h]
-            
-            # Resize to model input size
-            face_img = cv2.resize(face_roi, (48, 48))
-            
-            # Predict emotion
-            probs, emotion, emotion_idx = predict_emotion(face_img, model, device)
-            
-            if emotion:
-                # Draw rectangle around face
-                color = emotion_colors.get(emotion, (255, 255, 255))
-                cv2.rectangle(img_rgb, (x, y), (x+w, y+h), color, 2)
-                
-                # Draw emotion label
-                text = f"{emotion}"
-                cv2.putText(img_rgb, text, (x, y-10), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
-                
-                # Add to results
-                results.append((x, y, w, h, emotion, probs))
-        
-        return img_rgb, results
-    except Exception as e:
-        st.error(f"Error processing image: {str(e)}")
-        return None, []
-
-# Function to generate emotion probability chart for a face
+# Generate emotion probability chart
 def generate_emotion_chart(probs):
     fig, ax = plt.subplots(figsize=(10, 4))
     colors = [emotion_colors.get(emotion, (255, 255, 255)) for emotion in emotions]
@@ -138,6 +89,57 @@ def generate_emotion_chart(probs):
     plt.tight_layout()
     return fig
 
+# Video processor class for webcam
+class EmotionVideoProcessor(VideoProcessorBase):
+    def __init__(self, model, device, face_detector):
+        self.model = model
+        self.device = device
+        self.face_detector = face_detector
+        self.last_emotion = None
+        self.last_probs = None
+        
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        
+        # Convert to RGB for display and grayscale for detection
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Detect faces
+        faces = self.face_detector.detectMultiScale(
+            gray, 
+            scaleFactor=1.1, 
+            minNeighbors=5,
+            minSize=(30, 30)
+        )
+        
+        # Process each detected face
+        for (x, y, w, h) in faces:
+            # Extract face region
+            face_roi = gray[y:y+h, x:x+h]
+            
+            # Resize to model input size
+            face_img = cv2.resize(face_roi, (48, 48))
+            
+            # Predict emotion
+            probs, emotion, emotion_idx = predict_emotion(face_img, self.model, self.device)
+            
+            if emotion:
+                # Save last emotion and probabilities for display
+                self.last_emotion = emotion
+                self.last_probs = probs
+                
+                # Draw rectangle around face
+                color = emotion_colors.get(emotion, (255, 255, 255))
+                cv2.rectangle(img_rgb, (x, y), (x+w, y+h), color, 2)
+                
+                # Draw emotion label
+                text = f"{emotion}"
+                cv2.putText(img_rgb, text, (x, y-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+        
+        return frame.from_ndarray(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR))
+
 # Main app
 def main():
     # Load model and face detector
@@ -148,14 +150,85 @@ def main():
         st.error("Failed to load required components. Please check the error messages above.")
         return
     
-    # File uploader
-    uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+    # Tabs for different input methods
+    tab1, tab2 = st.tabs(["Real-time Webcam", "Upload Image"])
     
-    if uploaded_file is not None:
-        # Process the uploaded image
-        img_rgb, results = process_uploaded_image(uploaded_file, model, device, face_detector)
+    with tab1:
+        st.header("Real-time Emotion Detection")
         
-        if img_rgb is not None:
+        # Create WebRTC streamer with STUN servers for Streamlit Cloud
+        rtc_config = RTCConfiguration(
+            {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        )
+        
+        # Create video processor
+        processor = EmotionVideoProcessor(model, device, face_detector)
+        
+        # Create WebRTC streamer
+        webrtc_ctx = webrtc_streamer(
+            key="emotion-detection",
+            video_processor_factory=lambda: processor,
+            rtc_configuration=rtc_config,
+            media_stream_constraints={"video": True, "audio": False},
+        )
+        
+        # Create placeholder for emotion chart
+        chart_placeholder = st.empty()
+        
+        # Update chart when streaming is active
+        if webrtc_ctx.state.playing and processor.last_probs is not None:
+            chart = generate_emotion_chart(processor.last_probs)
+            chart_placeholder.pyplot(chart)
+    
+    with tab2:
+        st.header("Upload Image")
+        
+        # File uploader
+        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+        
+        if uploaded_file is not None:
+            # Read image from uploaded file
+            file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+            img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            
+            # Convert to RGB for display and grayscale for detection
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Detect faces
+            faces = face_detector.detectMultiScale(
+                gray, 
+                scaleFactor=1.1, 
+                minNeighbors=5,
+                minSize=(30, 30)
+            )
+            
+            results = []
+            
+            # Process each detected face
+            for (x, y, w, h) in faces:
+                # Extract face region
+                face_roi = gray[y:y+h, x:x+h]
+                
+                # Resize to model input size
+                face_img = cv2.resize(face_roi, (48, 48))
+                
+                # Predict emotion
+                probs, emotion, emotion_idx = predict_emotion(face_img, model, device)
+                
+                if emotion:
+                    # Draw rectangle around face
+                    color = emotion_colors.get(emotion, (255, 255, 255))
+                    cv2.rectangle(img_rgb, (x, y), (x+w, y+h), color, 2)
+                    
+                    # Draw emotion label
+                    text = f"{emotion}"
+                    cv2.putText(img_rgb, text, (x, y-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                    
+                    # Add to results
+                    results.append((x, y, w, h, emotion, probs))
+            
             # Display the image with emotion detection
             st.image(img_rgb, caption="Detected Emotions", use_column_width=True)
             
