@@ -326,87 +326,80 @@ elif detection_mode == "Webcam":
     face_detector = load_face_detector()
     gif_overlay = load_gif_overlay()
     
-    # Create webcam container
-    webcam_container = st.container()
+    import av
+    from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+    
+    # Setup WebRTC configuration
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
+    
+    # Create a video transformer for emotion detection
+    class EmotionDetector(VideoTransformerBase):
+        def __init__(self):
+            self.frame_count = 0
+            self.animation_offset = 0
+            
+        def transform(self, frame):
+            img = frame.to_ndarray(format="bgr24")
+            
+            # Process every N frames for better performance
+            if self.frame_count % st.session_state.process_every_n_frames == 0:
+                # Update animation offset
+                self.animation_offset = (self.animation_offset + 1) % 10
+                st.session_state.animation_offset = self.animation_offset
+                
+                # Process frame
+                result_frame, faces = process_image(img, model, device, face_detector, gif_overlay)
+                
+                # Update emotion data if faces found
+                if faces:
+                    update_emotion_data(faces)
+            else:
+                # Simple display for skipped frames
+                result_frame = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # Increment frame counter
+            self.frame_count += 1
+            
+            return av.VideoFrame.from_ndarray(result_frame, format="rgb24")
     
     # Add columns for buttons
     col1, col2 = st.columns(2)
     
-    # Add start/stop buttons
+    # Add start/stop buttons for data collection
     with col1:
-        start_button = st.button("Start Webcam")
+        if st.button("Start Data Collection"):
+            st.session_state.emotion_over_time = {emotion: [] for emotion in emotions}
+            st.session_state.frame_timestamps = []
+            st.session_state.should_plot = False
+            st.success("Data collection started! Use the webcam and emotions will be tracked.")
+    
     with col2:
-        stop_button = st.button("Stop Webcam")
+        if st.button("Stop and Generate Plots"):
+            st.session_state.should_plot = True
+            st.success("Data collection stopped. Generating plots...")
     
-    # Handle button states
-    if start_button:
-        st.session_state.run_webcam = True
-        st.session_state.should_plot = False
-        # Clear previous data when starting new session
-        st.session_state.emotion_over_time = {emotion: [] for emotion in emotions}
-        st.session_state.frame_timestamps = []
-        st.session_state.color_index = 0
-        st.session_state.frame_count = 0
+    # WebRTC streamer component
+    webrtc_ctx = webrtc_streamer(
+        key="emotion-detection",
+        video_transformer_factory=EmotionDetector,
+        rtc_configuration=rtc_configuration,
+        media_stream_constraints={"video": True, "audio": False},
+    )
     
-    if stop_button:
-        st.session_state.run_webcam = False
-        st.session_state.should_plot = True
+    # Information about webcam usage
+    if not webrtc_ctx.state.playing:
+        st.info("Click 'Start' button above to activate webcam")
+    else:
+        st.info("Webcam is active! Click 'Stop' when done.")
     
-    # Placeholder for webcam feed
-    frame_window = webcam_container.empty()
-    
-    # Run webcam if enabled
-    if st.session_state.run_webcam:
-        cap = cv2.VideoCapture(0)
-        
-        if not cap.isOpened():
-            st.error("Could not open webcam!")
-        else:
-            st.info("Webcam is active! Click 'Stop Webcam' when done.")
-            
-            # Use a more efficient webcam processing loop
-            try:
-                while st.session_state.run_webcam:
-                    ret, frame = cap.read()
-                    
-                    if not ret:
-                        st.error("Failed to capture frame from webcam!")
-                        break
-                    
-                    # Process frame based on counter for performance
-                    if st.session_state.frame_count % st.session_state.process_every_n_frames == 0:
-                        # Update animation offset (simpler pattern)
-                        st.session_state.animation_offset = (st.session_state.animation_offset + 1) % 10
-                        
-                        # Process frame - full processing
-                        result_frame, faces = process_image(frame, model, device, face_detector, gif_overlay)
-                        
-                        # Update emotion data if faces found
-                        if faces:
-                            update_emotion_data(faces)
-                    else:
-                        # For skipped frames, just display with previous detection
-                        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        result_frame = img_rgb  # Simple display for skipped frames
-                    
-                    # Display the frame
-                    frame_window.image(result_frame, channels="RGB", use_container_width=True)
-                    
-                    # Increment frame counter
-                    st.session_state.frame_count += 1
-                    
-                    # Very minimal sleep - just enough to prevent UI freezing
-                    time.sleep(0.03)  # Reduced from 0.1
-            finally:
-                # Always release the webcam when done
-                cap.release()
-    
-    # Generate plots after webcam stops
-    if st.session_state.should_plot:
+    # Generate plots if requested
+    if st.session_state.should_plot and len(st.session_state.frame_timestamps) > 0:
         st.subheader("Emotion Analysis Results")
         generate_plots()
-    elif not st.session_state.run_webcam:
-        frame_window.info("Click 'Start Webcam' to begin face emotion detection.")
+    elif st.session_state.should_plot and len(st.session_state.frame_timestamps) == 0:
+        st.warning("No emotion data collected. Please run the webcam first and ensure faces are detected.")
 
 # Add information about the project
 st.sidebar.markdown("---")
