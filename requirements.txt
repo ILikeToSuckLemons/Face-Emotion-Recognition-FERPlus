@@ -5,3 +5,4 @@ torchvision
 matplotlib
 numpy
 Pillow
+streamlit-webrtc
