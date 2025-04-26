@@ -6,7 +6,6 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 from models import PerformanceModel
-import time
 
 # Define emotions
 emotions = ["Neutral", "Happy", "Surprise", "Sad", "Angry", "Disgust", "Fear", "Contempt"]
@@ -23,7 +22,13 @@ emotion_colors = {
     "Contempt": (0, 255, 0)
 }
 
-# Load model
+# Create simple sidebar controls
+st.sidebar.title("Performance Settings")
+process_every_n = st.sidebar.slider("Process every N frames", 1, 10, 3)
+face_confidence = st.sidebar.slider("Face detection confidence", 1, 10, 5)
+resolution_scale = st.sidebar.slider("Processing resolution", 30, 100, 50)
+
+# Load model only once
 @st.cache_resource
 def load_model():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -32,119 +37,114 @@ def load_model():
     model.eval()
     return model, device
 
-# Load face detector
+# Load face detector only once
 @st.cache_resource
 def load_face_detector():
     return cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
+# Load resources
 model, device = load_model()
 face_detector = load_face_detector()
-
-# Performance settings
-st.sidebar.title("Performance Settings")
-process_every_n_frames = st.sidebar.slider("Process every N frames", 1, 10, 2)
-detection_scale = st.sidebar.slider("Detection Scale (%)", 30, 100, 60)
-show_fps = st.sidebar.checkbox("Show FPS", value=True)
 
 # Define the video processor
 class EmotionProcessor(VideoProcessorBase):
     def __init__(self):
         self.frame_count = 0
-        self.last_detection_time = time.time()
-        self.last_detection_faces = []
-        self.last_detection_emotions = []
-        self.fps_list = []
-        self.last_fps_update = time.time()
-        self.current_fps = 0
-    
+        self.last_faces = []
+        self.last_emotions = []
+        
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        start_time = time.time()
         self.frame_count += 1
         img = frame.to_ndarray(format="bgr24")
         
-        # Calculate FPS
-        if time.time() - self.last_fps_update > 1.0:  # Update FPS every second
-            self.current_fps = len(self.fps_list) / (time.time() - self.last_fps_update)
-            self.fps_list = []
-            self.last_fps_update = time.time()
-        
-        self.fps_list.append(time.time())
-        
-        # Only process every Nth frame for detection
-        if self.frame_count % process_every_n_frames == 0:
-            # Downscale image for faster processing
-            scale_percent = detection_scale
-            width = int(img.shape[1] * scale_percent / 100)
-            height = int(img.shape[0] * scale_percent / 100)
-            small_img = cv2.resize(img, (width, height))
-            gray = cv2.cvtColor(small_img, cv2.COLOR_BGR2GRAY)
+        # Only process every N frames to reduce CPU usage
+        if self.frame_count % process_every_n == 0:
+            # Reduce resolution for faster processing
+            h, w = img.shape[:2]
+            scale = resolution_scale / 100.0
+            small_frame = cv2.resize(img, (int(w * scale), int(h * scale)))
             
-            # Detect faces on smaller image
+            # Convert to grayscale for face detection
+            gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+            
+            # Detect faces with adjusted parameters for speed
             faces = face_detector.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20)
+                gray,
+                scaleFactor=1.2,  # Larger scale factor = faster but less accurate
+                minNeighbors=face_confidence,  # Adjust based on sidebar control
+                minSize=(20, 20)  # Minimum face size to detect
             )
             
-            # Scale coordinates back to original size
-            faces = [(int(x * 100/scale_percent), int(y * 100/scale_percent), 
-                     int(w * 100/scale_percent), int(h * 100/scale_percent)) for (x, y, w, h) in faces]
+            # Scale face coordinates back to original size
+            self.last_faces = [(int(x/scale), int(y/scale), int(w/scale), int(h/scale)) 
+                              for (x, y, w, h) in faces]
             
-            # Process emotions only if faces detected
-            self.last_detection_faces = []
-            self.last_detection_emotions = []
+            # Clear previous emotions
+            self.last_emotions = []
             
-            for (x, y, w, h) in faces:
-                face_roi = cv2.cvtColor(img[y:y+h, x:x+w], cv2.COLOR_BGR2GRAY)
-                face_img = cv2.resize(face_roi, (48, 48))
-                
-                # Normalize the image
-                face_tensor = torch.tensor(face_img, dtype=torch.float32).div(255).sub(0.5).div(0.5)
-                face_tensor = face_tensor.unsqueeze(0).unsqueeze(0).to(device)
-                
-                # Perform inference
-                with torch.no_grad():
-                    outputs = model(face_tensor)
-                    probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
-                    top_idx = np.argmax(probs)
-                    emotion = emotions[top_idx]
-                
-                self.last_detection_faces.append((x, y, w, h))
-                self.last_detection_emotions.append(emotion)
-            
-            self.last_detection_time = time.time()
+            # Only process emotions if faces are detected
+            if len(self.last_faces) > 0:
+                for (x, y, w, h) in self.last_faces:
+                    # Ensure face coordinates are within image bounds
+                    x, y = max(0, x), max(0, y)
+                    w = min(w, img.shape[1] - x)
+                    h = min(h, img.shape[0] - y)
+                    
+                    if w <= 0 or h <= 0:
+                        self.last_emotions.append("Unknown")
+                        continue
+                    
+                    # Extract face ROI
+                    face_roi = img[y:y+h, x:x+w]
+                    
+                    # Convert to grayscale and resize to model input size
+                    face_gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+                    face_resized = cv2.resize(face_gray, (48, 48))
+                    
+                    # Prepare tensor
+                    face_tensor = torch.tensor(face_resized, dtype=torch.float32) / 255.0
+                    face_tensor = (face_tensor - 0.5) / 0.5  # Normalize to [-1, 1]
+                    face_tensor = face_tensor.unsqueeze(0).unsqueeze(0).to(device)
+                    
+                    # Get emotion prediction (in a safer way)
+                    try:
+                        with torch.no_grad():
+                            outputs = model(face_tensor)
+                            probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
+                            emotion = emotions[np.argmax(probs)]
+                            self.last_emotions.append(emotion)
+                    except Exception as e:
+                        print(f"Error in emotion detection: {e}")
+                        self.last_emotions.append("Error")
         
-        # Always render the most recent detection results
-        for i, (x, y, w, h) in enumerate(self.last_detection_faces):
-            if i < len(self.last_detection_emotions):
-                emotion = self.last_detection_emotions[i]
+        # Draw the most recent detection results
+        for i, (x, y, w, h) in enumerate(self.last_faces):
+            if i < len(self.last_emotions):
+                emotion = self.last_emotions[i]
                 color = emotion_colors.get(emotion, (255, 255, 255))
                 cv2.rectangle(img, (x, y), (x+w, y+h), color, 2)
-                cv2.putText(img, emotion, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                cv2.putText(img, emotion, (x, y-10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
         
-        # Display FPS if enabled
-        if show_fps:
-            cv2.putText(img, f"FPS: {self.current_fps:.1f}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Calculate processing time
-        processing_time = time.time() - start_time
-        if processing_time > 0.033:  # If taking more than 33ms (30fps)
-            if self.frame_count % 30 == 0:  # Don't spam the log
-                print(f"Frame processing took {processing_time*1000:.1f}ms (slow)")
+        # Add a frame counter in the corner
+        cv2.putText(img, f"Frame: {self.frame_count}", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # Streamlit UI
 st.title("Real-Time Facial Emotion Recognition")
-st.markdown("""
+st.write("""
 This app detects emotions in real-time using your webcam.
-Adjust the performance settings in the sidebar if you experience lag.
+Adjust the settings in the sidebar to reduce lag if needed.
 """)
 
-webrtc_streamer(
-    key="emotion",
+# Create WebRTC streamer with minimal options
+webrtc_ctx = webrtc_streamer(
+    key="emotion-detection",
     mode=WebRtcMode.SENDRECV,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
     video_processor_factory=EmotionProcessor,
     media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,  # Process frames asynchronously
+    # Remove async_processing to avoid asyncio errors
 )
