@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torchvision import transforms
 import av
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-from streamlit_webrtc import RTCWE
 
 from models import PerformanceModel
 from emotionoverlay import EmotionOverlay
