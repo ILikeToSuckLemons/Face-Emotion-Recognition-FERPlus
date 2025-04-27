@@ -372,21 +372,22 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True,
 )
 
-# ✅ NEW: Automatically show graphs when camera is stopped
-if webrtc_ctx and webrtc_ctx.state == RTCAppState.STOPPED:
-    if not st.session_state.show_graphs:
-        st.session_state.show_graphs = True
-        st.experimental_rerun()  # Force rerun to immediately display graphs
-
-# Manual fallback: "Generate Emotion Graphs" button (still available)
-if st.button("Generate Emotion Graphs"):
+# Auto-display graphs when camera stops
+if webrtc_ctx.state.playing:
+    # Camera is running - set flag
+    st.session_state.was_playing = True
+elif st.session_state.get('was_playing', False):
+    # Camera was playing but has now stopped - show graphs automatically
+    st.session_state.was_playing = False
     st.session_state.show_graphs = True
+    # Force a rerun to show the graphs immediately
+    st.experimental_rerun()
 
-# Show graphs if ready and we have data
+# Show graphs when requested and we have data
 if st.session_state.show_graphs:
     graphs_displayed = display_emotion_graphs()
     
-    # Add button to clear data
+    # Add a button to clear data if graphs were displayed
     if graphs_displayed and st.button("Clear Emotion Data"):
         st.session_state.emotion_data = []
         st.session_state.show_graphs = False
