@@ -9,6 +9,9 @@ from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfigurati
 from models import PerformanceModel
 from emotionoverlay import EmotionOverlay
 from gifoverlay import GifEmotionOverlay
+import pandas as pd
+import time
+import matplotlib.pyplot as plt
 
 
 # Set page config
@@ -35,6 +38,10 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.5], std=[0.5])
 ])
 gif_overlay = GifEmotionOverlay("EmojiGif/")
+
+# Emotion data storage
+if 'emotion_data' not in st.session_state:
+    st.session_state.emotion_data = []
 
 # Emotion color definitions
 emotion_text_colors = {
@@ -77,6 +84,7 @@ class VideoProcessor(VideoProcessorBase):
         self.faces = []
         self.last_frame_time = 0
         self.processing_fps = 0
+        self.emotion_history = []
         
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -108,6 +116,10 @@ class VideoProcessor(VideoProcessorBase):
         scaled_faces = [(int(x * scale_factor), int(y * scale_factor), 
                          int(w * scale_factor), int(h * scale_factor)) for (x, y, w, h) in self.faces]
         
+        # Store emotion data for this frame
+        current_time = time.time()
+        frame_emotions = {emotion: 0 for emotion in emotions}
+        
         for (x, y, w, h) in scaled_faces:
             # Extract face from original image
             face_region = img[y:y+h, x:x+w]
@@ -124,6 +136,10 @@ class VideoProcessor(VideoProcessorBase):
                 probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
                 top_emotion_idx = np.argmax(probs)
                 top_emotion = emotions[top_emotion_idx]
+            
+            # Record emotion data for all faces
+            for i, prob in enumerate(probs):
+                frame_emotions[emotions[i]] += prob
             
             # Animation offset logic
             self.animation_offset += self.offset_direction * 2
@@ -152,6 +168,19 @@ class VideoProcessor(VideoProcessorBase):
                 text_color = emotion_text_colors[top_emotion][self.color_index]
                 text = f"{top_emotion}: {int(probs[top_emotion_idx] * 100)}%"
                 cv2.putText(img, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+                
+        # Store emotion data if faces were detected
+        if len(scaled_faces) > 0:
+            # Calculate average emotions across all detected faces
+            avg_emotions = {k: v/len(scaled_faces) if len(scaled_faces) > 0 else 0 for k, v in frame_emotions.items()}
+            self.emotion_history.append({
+                'timestamp': current_time,
+                **avg_emotions
+            })
+            
+            # Save to session state periodically
+            if self.frame_count % 15 == 0:  # Save every 15 frames to reduce overhead
+                st.session_state.emotion_data = self.emotion_history
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -169,12 +198,102 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True,
 )
 
+# Function to create and display graphs
+def display_emotion_graphs():
+    if not st.session_state.emotion_data:
+        st.warning("No emotion data recorded. Start the webcam and show your face to record emotions.")
+        return
+    
+    # Convert emotion data to dataframe
+    df = pd.DataFrame(st.session_state.emotion_data)
+    
+    # Calculate relative timestamps for the x-axis
+    start_time = df['timestamp'].min()
+    df['relative_time'] = df['timestamp'] - start_time
+    
+    # Create bar chart of total emotion scores
+    st.subheader("Total Emotion Distribution")
+    fig1, ax1 = plt.subplots(figsize=(10, 6))
+    
+    # Calculate average emotions across all frames
+    avg_emotions = df[emotions].mean().sort_values(ascending=False)
+    
+    # Create bar chart with custom colors
+    bars = ax1.bar(avg_emotions.index, avg_emotions.values * 100)
+    
+    # Set colors for bars
+    for i, bar in enumerate(bars):
+        emotion_name = avg_emotions.index[i]
+        # Convert BGR to RGB
+        bgr_color = emotion_colors[emotion_name]
+        rgb_color = (bgr_color[2]/255, bgr_color[1]/255, bgr_color[0]/255)
+        bar.set_color(rgb_color)
+    
+    ax1.set_ylabel('Average Score (%)')
+    ax1.set_title('Average Emotion Distribution')
+    ax1.set_ylim(0, 100)
+    
+    for i, v in enumerate(avg_emotions.values):
+        ax1.text(i, v * 100 + 1, f"{v*100:.1f}%", ha='center')
+    
+    plt.tight_layout()
+    st.pyplot(fig1)
+    
+    # Create line graph of emotions over time
+    st.subheader("Emotions Over Time")
+    fig2, ax2 = plt.subplots(figsize=(12, 6))
+    
+    # Resample data to smooth out the lines (every 1 second)
+    if len(df) > 100:  # Only if we have enough data points
+        df.set_index('relative_time', inplace=True)
+        df_resampled = df.resample('1S').mean().reset_index()
+        df_resampled.interpolate(method='linear', inplace=True)
+        plot_df = df_resampled
+    else:
+        plot_df = df
+    
+    # Plot each emotion line
+    for emotion in emotions:
+        # Convert BGR to RGB
+        bgr_color = emotion_colors[emotion]
+        rgb_color = (bgr_color[2]/255, bgr_color[1]/255, bgr_color[0]/255)
+        
+        if 'relative_time' in plot_df.columns:
+            x_values = plot_df['relative_time']
+        else:
+            x_values = range(len(plot_df))
+            
+        ax2.plot(x_values, plot_df[emotion] * 100, label=emotion, color=rgb_color, linewidth=2)
+    
+    ax2.set_xlabel('Time (seconds)')
+    ax2.set_ylabel('Emotion Score (%)')
+    ax2.set_title('Emotion Scores Over Time')
+    ax2.legend(loc='upper right')
+    ax2.set_ylim(0, 100)
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    st.pyplot(fig2)
+
+# Check if the webcam is stopped and display graphs
+if not webrtc_ctx.state.playing and st.session_state.emotion_data:
+    display_emotion_graphs()
+    
+    # Add a button to clear data
+    if st.button("Clear Emotion Data"):
+        st.session_state.emotion_data = []
+        st.experimental_rerun()
+
 with st.expander("About this app"):
     st.write("""
     This app performs real-time facial emotion recognition using a trained deep learning model.
     It detects faces and classifies emotions into 8 categories: Neutral, Happy, Surprise, Sad, Angry, Disgust, Fear, and Contempt.
     
     The app overlays emotion-specific GIFs and displays the probability for each emotion.
+    
+    When you stop the webcam, it will generate graphs showing:
+    1. A bar chart of the total emotion distribution
+    2. A line graph showing how emotions changed over time
     
     For better performance, adjust the settings in the sidebar:
     - Lower the face detection frequency
