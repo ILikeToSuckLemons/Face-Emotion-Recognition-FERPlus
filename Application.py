@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from torchvision import transforms
 import av
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-
 from models import PerformanceModel
 from emotionoverlay import EmotionOverlay
 from gifoverlay import GifEmotionOverlay
@@ -25,55 +24,27 @@ if 'emotion_data' not in st.session_state:
     
 if 'show_graphs' not in st.session_state:
     st.session_state.show_graphs = False
-    
-if 'was_playing' not in st.session_state:
-    st.session_state.was_playing = False
-    
-if 'face_detected' not in st.session_state:
-    st.session_state.face_detected = False
-    
-if 'debug_info' not in st.session_state:
-    st.session_state.debug_info = ""
 
 # Load model only once
 @st.cache_resource
 def load_model():
-    try:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        st.sidebar.info(f"Using device: {device}")
-        model_path = "model/ferplus_model_pd_acc.pth"
-        model = PerformanceModel(input_shape=(1, 48, 48), n_classes=8, logits=True).to(device)
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        model.eval()
-        return model, device
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        return None, None
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_path = "model/ferplus_model_pd_acc.pth"
+    model = PerformanceModel(input_shape=(1, 48, 48), n_classes=8, logits=True).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+    return model, device
 
 # Global variables
 model, device = load_model()
 emotions = ["Neutral", "Happy", "Surprise", "Sad", "Angry", "Disgust", "Fear", "Contempt"]
-
-# Load face detection cascade with error checking
-try:
-    haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    st.sidebar.success("Face detection model loaded successfully")
-except Exception as e:
-    st.error(f"Error loading face detection: {str(e)}")
-    haar_cascade = None
-
+haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Resize((48, 48)),
     transforms.Normalize(mean=[0.5], std=[0.5])
 ])
-
-try:
-    gif_overlay = GifEmotionOverlay("EmojiGif/")
-    st.sidebar.success("GIF overlay loaded successfully")
-except Exception as e:
-    st.error(f"Error loading GIF overlay: {str(e)}")
-    gif_overlay = None
+gif_overlay = GifEmotionOverlay("EmojiGif/")
 
 # Emotion color definitions
 emotion_text_colors = {
@@ -100,20 +71,12 @@ emotion_colors = {
 
 # Add performance options in sidebar
 st.sidebar.title("Performance Settings")
-detect_frequency = st.sidebar.slider("Face Detection Frequency", 1, 10, 3, 
+detect_frequency = st.sidebar.slider("Face Detection Frequency", 1, 10, 5, 
                                     help="Higher values = less frequent detection = better performance")
 resolution_factor = st.sidebar.slider("Resolution Scale", 0.5, 1.0, 0.75, 0.05,
                                      help="Lower values = smaller resolution = better performance")
 show_all_emotions = st.sidebar.checkbox("Show All Emotions", True,
                                       help="Uncheck to only display top emotion for better performance")
-
-# Add debug options
-st.sidebar.title("Debug Options")
-debug_mode = st.sidebar.checkbox("Show Debug Info", True)
-face_detection_scale = st.sidebar.slider("Face Detection Scale Factor", 1.05, 1.5, 1.1, 0.05,
-                                      help="Lower values detect more faces but slower")
-min_neighbors = st.sidebar.slider("Min Neighbors", 1, 10, 3, 
-                                 help="Lower values detect more faces but may include false positives")
 
 class VideoProcessor(VideoProcessorBase):
     def __init__(self):
@@ -126,161 +89,103 @@ class VideoProcessor(VideoProcessorBase):
         self.processing_fps = 0
         self.emotion_history = []
         self.start_time = time.time()
-        self.debug_text = ""
-        self.face_detected = False
         
     def recv(self, frame):
-        try:
-            # Start frame timing
-            start_time = time.time()
-            
-            img = frame.to_ndarray(format="bgr24")
-            
-            # Downscale image for processing (improves performance)
-            h, w = img.shape[:2]
-            img_small = cv2.resize(img, (int(w * resolution_factor), int(h * resolution_factor)))
-            scale_factor = 1 / resolution_factor
-            
-            # Process frame
-            gray = cv2.cvtColor(img_small, cv2.COLOR_BGR2GRAY)
-            
-            # Color cycling
-            if self.frame_count % 10 == 0:  
-                self.color_index = (self.color_index + 1) % 3
-                
-            # Run face detection less frequently for better performance
-            if self.frame_count % detect_frequency == 0:
-                # Add debug rectangle to show processing area
-                if debug_mode:
-                    cv2.rectangle(img, (0, 0), (w, h), (0, 255, 0), 2)
-                
-                # Improve face detection with histogram equalization
-                gray_eq = cv2.equalizeHist(gray)
-                
-                self.faces = haar_cascade.detectMultiScale(
-                    gray_eq, 
-                    scaleFactor=face_detection_scale,
-                    minNeighbors=min_neighbors, 
-                    minSize=(int(30 * resolution_factor), int(30 * resolution_factor))
-                )
-                
-                if len(self.faces) > 0:
-                    self.face_detected = True
-                    st.session_state.face_detected = True
-                
-            self.frame_count += 1
-            
-            # Scale back face coordinates to original image size
-            scaled_faces = [(int(x * scale_factor), int(y * scale_factor), 
-                             int(w * scale_factor), int(h * scale_factor)) for (x, y, w, h) in self.faces]
-            
-            # Store emotion data for this frame
-            current_time = time.time()
-            frame_emotions = {emotion: 0 for emotion in emotions}
-            
-            # Show debug info about faces detected
-            if debug_mode:
-                self.debug_text = f"Detected {len(scaled_faces)} faces"
-                cv2.putText(img, self.debug_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                           1, (0, 255, 0), 2)
-            
-            for (x, y, w, h) in scaled_faces:
-                try:
-                    # Extract face from original image
-                    face_region = img[y:y+h, x:x+w]
-                    if face_region.size == 0:  # Skip if face region is invalid
-                        continue
-                        
-                    face_gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
-                    face_resized = cv2.resize(face_gray, (48, 48))
-                    
-                    # Show the processed face in debug mode
-                    if debug_mode:
-                        # Place the small face in the corner for debugging
-                        face_display = cv2.resize(face_resized, (96, 96))
-                        img[10:106, w-106:w-10] = cv2.cvtColor(face_display, cv2.COLOR_GRAY2BGR)
-                    
-                    face_tensor = transform(face_resized).unsqueeze(0).to(device)
-                    
-                    # Run model inference
-                    with torch.no_grad():
-                        outputs = model(face_tensor)
-                        probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
-                        top_emotion_idx = np.argmax(probs)
-                        top_emotion = emotions[top_emotion_idx]
-                    
-                    # Record emotion data for all faces
-                    for i, prob in enumerate(probs):
-                        frame_emotions[emotions[i]] += prob
-                    
-                    # Animation offset logic
-                    self.animation_offset += self.offset_direction * 2
-                    if abs(self.animation_offset) > 10:
-                        self.offset_direction *= -1
-                    
-                    # Overlay character if gif_overlay is available
-                    if gif_overlay:
-                        img = gif_overlay.overlay_gif(img, top_emotion, x, y, w, h, self.animation_offset)
-                    
-                    # Draw rectangle
-                    box_color = emotion_colors.get(top_emotion, (255, 255, 255))
-                    cv2.rectangle(img, (x, y), (x + w, y + h), box_color, 2)
-                    
-                    # Display either all emotions or just the top one based on settings
-                    if show_all_emotions:
-                        for i, (emotion, prob) in enumerate(zip(emotions, probs)):
-                            if i == top_emotion_idx:
-                                text_color = emotion_text_colors[top_emotion][self.color_index]
-                            else:
-                                text_color = (255, 255, 255)
-                            
-                            text = f"{emotion}: {int(prob * 100)}%"
-                            cv2.putText(img, text, (x, y - 10 - (i * 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
-                    else:
-                        # Only show top emotion
-                        text_color = emotion_text_colors[top_emotion][self.color_index]
-                        text = f"{top_emotion}: {int(probs[top_emotion_idx] * 100)}%"
-                        cv2.putText(img, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
-                except Exception as e:
-                    if debug_mode:
-                        error_msg = f"Error in face processing: {str(e)}"
-                        cv2.putText(img, error_msg, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                    continue
-                    
-            # Store emotion data if faces were detected
-            if len(scaled_faces) > 0:
-                # Calculate average emotions across all detected faces
-                avg_emotions = {k: v/len(scaled_faces) if len(scaled_faces) > 0 else 0 for k, v in frame_emotions.items()}
-                
-                # Add to emotion history with relative time
-                self.emotion_history.append({
-                    'timestamp': current_time - self.start_time,  # Store as relative time
-                    **avg_emotions
-                })
-                
-                # Update session state for later use
-                st.session_state.emotion_data = self.emotion_history
-            
-            # Calculate and display FPS if in debug mode
-            process_time = time.time() - start_time
-            fps = 1.0 / process_time if process_time > 0 else 0
-            
-            if debug_mode:
-                fps_text = f"FPS: {fps:.1f}"
-                cv2.putText(img, fps_text, (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                
-                # Update debug info in session state
-                st.session_state.debug_info = (
-                    f"FPS: {fps:.1f}, Faces: {len(scaled_faces)}, "
-                    f"Resolution: {w}x{h}, Scale: {resolution_factor:.2f}"
-                )
+        img = frame.to_ndarray(format="bgr24")
         
-        except Exception as e:
-            # Global error handling
-            error_msg = f"Error in frame processing: {str(e)}"
-            st.session_state.debug_info = error_msg
-            if img is not None:
-                cv2.putText(img, "ERROR", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        # Downscale image for processing (improves performance)
+        h, w = img.shape[:2]
+        img_small = cv2.resize(img, (int(w * resolution_factor), int(h * resolution_factor)))
+        scale_factor = 1 / resolution_factor
+        
+        # Process frame
+        gray = cv2.cvtColor(img_small, cv2.COLOR_BGR2GRAY)
+        
+        # Color cycling
+        if self.frame_count % 10 == 0:  
+            self.color_index = (self.color_index + 1) % 3
+            
+        # Run face detection less frequently for better performance
+        if self.frame_count % detect_frequency == 0:
+            self.faces = haar_cascade.detectMultiScale(
+                gray, 
+                scaleFactor=1.2, 
+                minNeighbors=5, 
+                minSize=(int(48 * resolution_factor), int(48 * resolution_factor))
+            )
+            
+        self.frame_count += 1
+        
+        # Scale back face coordinates to original image size
+        scaled_faces = [(int(x * scale_factor), int(y * scale_factor), 
+                         int(w * scale_factor), int(h * scale_factor)) for (x, y, w, h) in self.faces]
+        
+        # Store emotion data for this frame
+        current_time = time.time()
+        frame_emotions = {emotion: 0 for emotion in emotions}
+        
+        for (x, y, w, h) in scaled_faces:
+            # Extract face from original image
+            face_region = img[y:y+h, x:x+w]
+            if face_region.size == 0:  # Skip if face region is invalid
+                continue
+                
+            face_gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
+            face_resized = cv2.resize(face_gray, (48, 48))
+            face_tensor = torch.tensor(face_resized, dtype=torch.float32).div(255).sub(0.5).div(0.5).unsqueeze(0).unsqueeze(0).to(device)
+            
+            # Run model inference
+            with torch.no_grad():
+                outputs = model(face_tensor)
+                probs = F.softmax(outputs, dim=1)[0].cpu().numpy()
+                top_emotion_idx = np.argmax(probs)
+                top_emotion = emotions[top_emotion_idx]
+            
+            # Record emotion data for all faces
+            for i, prob in enumerate(probs):
+                frame_emotions[emotions[i]] += prob
+            
+            # Animation offset logic
+            self.animation_offset += self.offset_direction * 2
+            if abs(self.animation_offset) > 10:
+                self.offset_direction *= -1
+            
+            # Overlay character
+            img = gif_overlay.overlay_gif(img, top_emotion, x, y, w, h, self.animation_offset)
+            
+            # Draw rectangle
+            box_color = emotion_colors.get(top_emotion, (255, 255, 255))
+            cv2.rectangle(img, (x, y), (x + w, y + h), box_color, 2)
+            
+            # Display either all emotions or just the top one based on settings
+            if show_all_emotions:
+                for i, (emotion, prob) in enumerate(zip(emotions, probs)):
+                    if i == top_emotion_idx:
+                        text_color = emotion_text_colors[top_emotion][self.color_index]
+                    else:
+                        text_color = (255, 255, 255)
+                    
+                    text = f"{emotion}: {int(prob * 100)}%"
+                    cv2.putText(img, text, (x, y - 10 - (i * 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+            else:
+                # Only show top emotion
+                text_color = emotion_text_colors[top_emotion][self.color_index]
+                text = f"{top_emotion}: {int(probs[top_emotion_idx] * 100)}%"
+                cv2.putText(img, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+                
+        # Store emotion data if faces were detected
+        if len(scaled_faces) > 0:
+            # Calculate average emotions across all detected faces
+            avg_emotions = {k: v/len(scaled_faces) if len(scaled_faces) > 0 else 0 for k, v in frame_emotions.items()}
+            
+            # Add to emotion history with relative time
+            self.emotion_history.append({
+                'timestamp': current_time - self.start_time,  # Store as relative time
+                **avg_emotions
+            })
+            
+            # Update session state for later use
+            st.session_state.emotion_data = self.emotion_history
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -356,12 +261,6 @@ rtc_configuration = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
-# Display status info
-status_placeholder = st.empty()
-
-# Display WebRTC component
-
-
 # Display WebRTC component
 webrtc_ctx = webrtc_streamer(
     key="facial-emotion",
@@ -371,16 +270,11 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True,
 )
 
-# Auto-display graphs when camera stops
-if webrtc_ctx.state.playing:
-    # Camera is running - set flag
-    st.session_state.was_playing = True
-elif st.session_state.get('was_playing', False):
-    # Camera was playing but has now stopped - show graphs automatically
-    st.session_state.was_playing = False
+# Add generate graphs button that's always visible
+# If webcam session has ended, automatically show graphs
+if not webrtc_ctx.state.playing and len(st.session_state.emotion_data) > 0:
     st.session_state.show_graphs = True
-    # Force a rerun to show the graphs immediately
-    st.experimental_rerun()
+
 
 # Show graphs when requested and we have data
 if st.session_state.show_graphs:
@@ -392,11 +286,6 @@ if st.session_state.show_graphs:
         st.session_state.show_graphs = False
         st.experimental_rerun()
 
-
-# Display data count
-if st.session_state.emotion_data:
-    st.sidebar.success(f"Data points collected: {len(st.session_state.emotion_data)}")
-
 with st.expander("About this app"):
     st.write("""
     This app performs real-time facial emotion recognition using a trained deep learning model.
@@ -404,29 +293,12 @@ with st.expander("About this app"):
     
     The app overlays emotion-specific GIFs and displays the probability for each emotion.
     
-    The app will automatically generate emotion graphs when you stop the camera. You can also:
-    - Press the "Generate Emotion Graphs" button anytime to see the current results
-    - Clear collected data with the "Clear Emotion Data" button
+    Press the "Generate Emotion Graphs" button anytime to see:
+    1. A bar chart of the total emotion distribution
+    2. A line graph showing how emotions changed over time
     
     For better performance, adjust the settings in the sidebar:
     - Lower the face detection frequency
     - Reduce the resolution scale
     - Disable showing all emotions
-    """)
-
-with st.expander("Troubleshooting"):
-    st.write("""
-    If face detection is not working:
-    
-    1. Make sure your face is well-lit and clearly visible
-    2. Try adjusting the Face Detection Scale Factor (lower values can detect more faces)
-    3. Try lowering the Min Neighbors value (3-5 works well in most cases)
-    4. Check that your camera is working properly
-    5. Try enabling Debug Mode to see what's happening
-    
-    If the emotion recognition seems inaccurate:
-    
-    1. Ensure your face is well-lit from the front
-    2. Try to keep a neutral pose and then express different emotions clearly
-    3. The model works best with clear, exaggerated expressions
     """)
