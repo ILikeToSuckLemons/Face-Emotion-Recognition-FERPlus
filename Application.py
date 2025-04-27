@@ -188,11 +188,6 @@ class VideoProcessor(VideoProcessorBase):
             st.session_state.emotion_data = self.emotion_history
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
-        
-    def on_ended(self):
-        # Signal that graphs should be shown
-        st.session_state.show_graphs = True
-
 
 # Function to create and display graphs
 def display_emotion_graphs():
@@ -275,17 +270,11 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True,
 )
 
-# Check for state changes in the webrtc component
-if webrtc_ctx.state.playing:
-    st.session_state.show_graphs = False
-elif not webrtc_ctx.state.playing and len(st.session_state.emotion_data) > 0:
+# Add generate graphs button that's always visible
+if st.button("Generate Emotion Graphs"):
     st.session_state.show_graphs = True
 
-# Add manual button to show graphs
-if not webrtc_ctx.state.playing and st.button("Generate Emotion Graphs"):
-    st.session_state.show_graphs = True
-
-# Show graphs when webcam is stopped and we have data
+# Show graphs when requested and we have data
 if st.session_state.show_graphs:
     graphs_displayed = display_emotion_graphs()
     
@@ -302,11 +291,9 @@ with st.expander("About this app"):
     
     The app overlays emotion-specific GIFs and displays the probability for each emotion.
     
-    When you stop the webcam, it will generate graphs showing:
+    Press the "Generate Emotion Graphs" button anytime to see:
     1. A bar chart of the total emotion distribution
     2. A line graph showing how emotions changed over time
-    
-    If graphs don't appear automatically, press the "Generate Emotion Graphs" button.
     
     For better performance, adjust the settings in the sidebar:
     - Lower the face detection frequency
