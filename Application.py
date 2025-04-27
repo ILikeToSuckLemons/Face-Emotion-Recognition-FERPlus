@@ -18,6 +18,13 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Real-time Facial Emotion Recognition", layout="wide")
 st.title("Real-time Facial Emotion Recognition")
 
+# Initialize session state for emotion data storage
+if 'emotion_data' not in st.session_state:
+    st.session_state.emotion_data = []
+    
+if 'show_graphs' not in st.session_state:
+    st.session_state.show_graphs = False
+
 # Load model only once
 @st.cache_resource
 def load_model():
@@ -38,10 +45,6 @@ transform = transforms.Compose([
     transforms.Normalize(mean=[0.5], std=[0.5])
 ])
 gif_overlay = GifEmotionOverlay("EmojiGif/")
-
-# Emotion data storage
-if 'emotion_data' not in st.session_state:
-    st.session_state.emotion_data = []
 
 # Emotion color definitions
 emotion_text_colors = {
@@ -85,6 +88,7 @@ class VideoProcessor(VideoProcessorBase):
         self.last_frame_time = 0
         self.processing_fps = 0
         self.emotion_history = []
+        self.start_time = time.time()
         
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -173,16 +177,89 @@ class VideoProcessor(VideoProcessorBase):
         if len(scaled_faces) > 0:
             # Calculate average emotions across all detected faces
             avg_emotions = {k: v/len(scaled_faces) if len(scaled_faces) > 0 else 0 for k, v in frame_emotions.items()}
+            
+            # Add to emotion history with relative time
             self.emotion_history.append({
-                'timestamp': current_time,
+                'timestamp': current_time - self.start_time,  # Store as relative time
                 **avg_emotions
             })
             
-            # Save to session state periodically
-            if self.frame_count % 15 == 0:  # Save every 15 frames to reduce overhead
-                st.session_state.emotion_data = self.emotion_history
+            # Update session state for later use
+            st.session_state.emotion_data = self.emotion_history
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
+        
+    def on_ended(self):
+        # Signal that graphs should be shown
+        st.session_state.show_graphs = True
+
+
+# Function to create and display graphs
+def display_emotion_graphs():
+    if len(st.session_state.emotion_data) == 0:
+        st.warning("No emotion data recorded. Start the webcam and show your face to record emotions.")
+        return False
+    
+    # Convert emotion data to dataframe
+    df = pd.DataFrame(st.session_state.emotion_data)
+    
+    # Create two columns for the graphs
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Create bar chart of total emotion scores
+        st.subheader("Total Emotion Distribution")
+        fig1, ax1 = plt.subplots(figsize=(8, 5))
+        
+        # Calculate average emotions across all frames
+        avg_emotions = df[emotions].mean().sort_values(ascending=False)
+        
+        # Create bar chart with custom colors
+        bars = ax1.bar(avg_emotions.index, avg_emotions.values * 100)
+        
+        # Set colors for bars
+        for i, bar in enumerate(bars):
+            emotion_name = avg_emotions.index[i]
+            # Convert BGR to RGB
+            bgr_color = emotion_colors[emotion_name]
+            rgb_color = (bgr_color[2]/255, bgr_color[1]/255, bgr_color[0]/255)
+            bar.set_color(rgb_color)
+        
+        ax1.set_ylabel('Average Score (%)')
+        ax1.set_title('Average Emotion Distribution')
+        ax1.set_ylim(0, 100)
+        ax1.tick_params(axis='x', rotation=45)
+        
+        for i, v in enumerate(avg_emotions.values):
+            ax1.text(i, v * 100 + 1, f"{v*100:.1f}%", ha='center')
+        
+        plt.tight_layout()
+        st.pyplot(fig1)
+    
+    with col2:
+        # Create line graph of emotions over time
+        st.subheader("Emotions Over Time")
+        fig2, ax2 = plt.subplots(figsize=(8, 5))
+        
+        # Plot each emotion line
+        for emotion in emotions:
+            # Convert BGR to RGB
+            bgr_color = emotion_colors[emotion]
+            rgb_color = (bgr_color[2]/255, bgr_color[1]/255, bgr_color[0]/255)
+            
+            ax2.plot(df['timestamp'], df[emotion] * 100, label=emotion, color=rgb_color, linewidth=2)
+        
+        ax2.set_xlabel('Time (seconds)')
+        ax2.set_ylabel('Emotion Score (%)')
+        ax2.set_title('Emotion Scores Over Time')
+        ax2.legend(loc='upper right')
+        ax2.set_ylim(0, 100)
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        st.pyplot(fig2)
+    
+    return True
 
 # Configure WebRTC
 rtc_configuration = RTCConfiguration(
@@ -198,90 +275,24 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True,
 )
 
-# Function to create and display graphs
-def display_emotion_graphs():
-    if not st.session_state.emotion_data:
-        st.warning("No emotion data recorded. Start the webcam and show your face to record emotions.")
-        return
-    
-    # Convert emotion data to dataframe
-    df = pd.DataFrame(st.session_state.emotion_data)
-    
-    # Calculate relative timestamps for the x-axis
-    start_time = df['timestamp'].min()
-    df['relative_time'] = df['timestamp'] - start_time
-    
-    # Create bar chart of total emotion scores
-    st.subheader("Total Emotion Distribution")
-    fig1, ax1 = plt.subplots(figsize=(10, 6))
-    
-    # Calculate average emotions across all frames
-    avg_emotions = df[emotions].mean().sort_values(ascending=False)
-    
-    # Create bar chart with custom colors
-    bars = ax1.bar(avg_emotions.index, avg_emotions.values * 100)
-    
-    # Set colors for bars
-    for i, bar in enumerate(bars):
-        emotion_name = avg_emotions.index[i]
-        # Convert BGR to RGB
-        bgr_color = emotion_colors[emotion_name]
-        rgb_color = (bgr_color[2]/255, bgr_color[1]/255, bgr_color[0]/255)
-        bar.set_color(rgb_color)
-    
-    ax1.set_ylabel('Average Score (%)')
-    ax1.set_title('Average Emotion Distribution')
-    ax1.set_ylim(0, 100)
-    
-    for i, v in enumerate(avg_emotions.values):
-        ax1.text(i, v * 100 + 1, f"{v*100:.1f}%", ha='center')
-    
-    plt.tight_layout()
-    st.pyplot(fig1)
-    
-    # Create line graph of emotions over time
-    st.subheader("Emotions Over Time")
-    fig2, ax2 = plt.subplots(figsize=(12, 6))
-    
-    # Resample data to smooth out the lines (every 1 second)
-    if len(df) > 100:  # Only if we have enough data points
-        df.set_index('relative_time', inplace=True)
-        df_resampled = df.resample('1S').mean().reset_index()
-        df_resampled.interpolate(method='linear', inplace=True)
-        plot_df = df_resampled
-    else:
-        plot_df = df
-    
-    # Plot each emotion line
-    for emotion in emotions:
-        # Convert BGR to RGB
-        bgr_color = emotion_colors[emotion]
-        rgb_color = (bgr_color[2]/255, bgr_color[1]/255, bgr_color[0]/255)
-        
-        if 'relative_time' in plot_df.columns:
-            x_values = plot_df['relative_time']
-        else:
-            x_values = range(len(plot_df))
-            
-        ax2.plot(x_values, plot_df[emotion] * 100, label=emotion, color=rgb_color, linewidth=2)
-    
-    ax2.set_xlabel('Time (seconds)')
-    ax2.set_ylabel('Emotion Score (%)')
-    ax2.set_title('Emotion Scores Over Time')
-    ax2.legend(loc='upper right')
-    ax2.set_ylim(0, 100)
-    ax2.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    st.pyplot(fig2)
+# Check for state changes in the webrtc component
+if webrtc_ctx.state.playing:
+    st.session_state.show_graphs = False
+elif not webrtc_ctx.state.playing and len(st.session_state.emotion_data) > 0:
+    st.session_state.show_graphs = True
 
-# Check if the webcam is stopped and display graphs
-if not webrtc_ctx.state.playing and st.session_state.emotion_data:
-    display_emotion_graphs()
+# Add manual button to show graphs
+if not webrtc_ctx.state.playing and st.button("Generate Emotion Graphs"):
+    st.session_state.show_graphs = True
+
+# Show graphs when webcam is stopped and we have data
+if st.session_state.show_graphs:
+    graphs_displayed = display_emotion_graphs()
     
-    # Add a button to clear data
-    if st.button("Clear Emotion Data"):
+    # Add a button to clear data if graphs were displayed
+    if graphs_displayed and st.button("Clear Emotion Data"):
         st.session_state.emotion_data = []
+        st.session_state.show_graphs = False
         st.experimental_rerun()
 
 with st.expander("About this app"):
@@ -294,6 +305,8 @@ with st.expander("About this app"):
     When you stop the webcam, it will generate graphs showing:
     1. A bar chart of the total emotion distribution
     2. A line graph showing how emotions changed over time
+    
+    If graphs don't appear automatically, press the "Generate Emotion Graphs" button.
     
     For better performance, adjust the settings in the sidebar:
     - Lower the face detection frequency
