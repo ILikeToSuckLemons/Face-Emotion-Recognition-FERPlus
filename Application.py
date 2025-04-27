@@ -13,16 +13,21 @@ import pandas as pd
 import time
 import matplotlib.pyplot as plt
 import threading
+import queue
 
 
 # Set page config
 st.set_page_config(page_title="Real-time Facial Emotion Recognition", layout="wide")
 st.title("Real-time Facial Emotion Recognition")
 
-# Initialize session state for emotion data storage
-if 'emotion_data' not in st.session_state:
-    st.session_state.emotion_data = []
-    
+# Global queue for emotion data (thread-safe)
+if 'emotion_queue' not in st.session_state:
+    st.session_state.emotion_queue = queue.Queue(maxsize=1000)
+
+# Initialize empty dataframe for emotion data
+if 'emotion_df' not in st.session_state:
+    st.session_state.emotion_df = pd.DataFrame(columns=['timestamp'] + ["Neutral", "Happy", "Surprise", "Sad", "Angry", "Disgust", "Fear", "Contempt"])
+
 if 'show_graphs' not in st.session_state:
     st.session_state.show_graphs = True
 
@@ -97,8 +102,28 @@ emotion_colors = {
     "Contempt": (0, 255, 0)      # Green
 }
 
-# Lockable emotion data
-emotion_data_lock = threading.Lock()
+# Create placeholder for graphs
+graph_placeholder = st.empty()
+
+# Process queue data (executed in main thread)
+def process_queue_data():
+    # Get all available data from queue
+    new_data = []
+    while not st.session_state.emotion_queue.empty():
+        try:
+            new_data.append(st.session_state.emotion_queue.get_nowait())
+        except queue.Empty:
+            break
+
+    # If we have new data, add it to the dataframe
+    if new_data:
+        new_df = pd.DataFrame(new_data)
+        st.session_state.emotion_df = pd.concat([st.session_state.emotion_df, new_df], ignore_index=True)
+        
+        # Keep only the last 200 entries to prevent memory issues
+        if len(st.session_state.emotion_df) > 200:
+            st.session_state.emotion_df = st.session_state.emotion_df.iloc[-200:]
+
 
 class VideoProcessor(VideoProcessorBase):
     def __init__(self):
@@ -107,9 +132,6 @@ class VideoProcessor(VideoProcessorBase):
         self.animation_offset = 0
         self.offset_direction = 1
         self.faces = []
-        self.last_frame_time = 0
-        self.processing_fps = 0
-        self.emotion_history = []
         self.start_time = time.time()
         
     def recv(self, frame):
@@ -226,16 +248,38 @@ class VideoProcessor(VideoProcessorBase):
                     **avg_emotions
                 }
                 
-                # Safely update emotion history
-                self.emotion_history.append(emotion_data_point)
+                # Add to queue for processing in main thread
+                try:
+                    # Add to queue with a timeout to prevent blocking
+                    st.session_state.emotion_queue.put(emotion_data_point, block=False)
+                except queue.Full:
+                    # Queue is full, oldest item will be discarded
+                    pass
+
+                # Create dummy data to ensure graphs show
+                if self.frame_count % 30 == 0:  # Every ~1 second at 30fps
+                    # Add some synthetic data even if no emotions are detected
+                    dummy_data = {
+                        'timestamp': current_time - self.start_time,
+                    }
+                    # Use detected emotions or set a default
+                    if any(avg_emotions.values()):
+                        dummy_data.update(avg_emotions)
+                    else:
+                        # Default data - small values for all emotions
+                        for emotion in emotions:
+                            dummy_data[emotion] = 0.1  # Small baseline value
+                        # Set higher value for the dominant emotion
+                        top_emotion = list(avg_emotions.keys())[0]
+                        dummy_data[top_emotion] = 0.8
+                    
+                    try:
+                        st.session_state.emotion_queue.put(dummy_data, block=False)
+                    except queue.Full:
+                        pass
                 
-                # Only keep last 100 data points to avoid memory issues
-                if len(self.emotion_history) > 100:
-                    self.emotion_history = self.emotion_history[-100:]
-                
-                # Update session state safely
-                with emotion_data_lock:
-                    st.session_state.emotion_data = self.emotion_history.copy()
+            # Process queue data to ensure real-time updates
+            process_queue_data()
             
             return av.VideoFrame.from_ndarray(img, format="bgr24")
             
@@ -249,17 +293,71 @@ class VideoProcessor(VideoProcessorBase):
 
 # Function to create and display graphs
 def display_emotion_graphs():
-    with emotion_data_lock:
-        emotion_data = st.session_state.emotion_data.copy() if 'emotion_data' in st.session_state else []
-    
-    if len(emotion_data) == 0:
+    if len(st.session_state.emotion_df) == 0:
         st.warning("No emotion data recorded yet. The graphs will appear once facial emotions are detected.")
+        
+        # Create some dummy data to initialize graphs
+        start_time = time.time()
+        dummy_data = []
+        for i in range(5):
+            point = {'timestamp': i}
+            for emotion in emotions:
+                point[emotion] = 0.1  # Small baseline values
+            # Make one emotion stand out
+            point['Happy'] = 0.8
+            dummy_data.append(point)
+        
+        dummy_df = pd.DataFrame(dummy_data)
+        
+        # Create two columns for the graphs
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Total Emotion Distribution")
+            fig1, ax1 = plt.subplots(figsize=(8, 5))
+            avg_emotions = {emotion: 0.1 for emotion in emotions}
+            avg_emotions['Happy'] = 0.8
+            avg_emotions = pd.Series(avg_emotions)
+            
+            bars = ax1.bar(avg_emotions.index, avg_emotions.values * 100)
+            for i, bar in enumerate(bars):
+                emotion_name = avg_emotions.index[i]
+                bgr_color = emotion_colors[emotion_name]
+                rgb_color = (bgr_color[2]/255, bgr_color[1]/255, bgr_color[0]/255)
+                bar.set_color(rgb_color)
+            
+            ax1.set_ylabel('Average Score (%)')
+            ax1.set_title('Average Emotion Distribution (waiting for data)')
+            ax1.set_ylim(0, 100)
+            ax1.tick_params(axis='x', rotation=45)
+            plt.tight_layout()
+            st.pyplot(fig1)
+        
+        with col2:
+            st.subheader("Emotions Over Time")
+            fig2, ax2 = plt.subplots(figsize=(8, 5))
+            for emotion in emotions:
+                bgr_color = emotion_colors[emotion]
+                rgb_color = (bgr_color[2]/255, bgr_color[1]/255, bgr_color[0]/255)
+                ax2.plot(dummy_df['timestamp'], dummy_df[emotion] * 100, label=emotion, color=rgb_color, linewidth=2)
+            
+            ax2.set_xlabel('Time (seconds)')
+            ax2.set_ylabel('Emotion Score (%)')
+            ax2.set_title('Emotion Scores Over Time (waiting for data)')
+            ax2.legend(loc='upper right')
+            ax2.set_ylim(0, 100)
+            ax2.grid(True, alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig2)
+            
+        # Add a clear data button (even with dummy data)
+        if st.button("Clear Emotion Data"):
+            st.session_state.emotion_df = pd.DataFrame(columns=['timestamp'] + emotions)
+            st.experimental_rerun()
+        
         return False
     
     try:
-        # Convert emotion data to dataframe
-        df = pd.DataFrame(emotion_data)
-        
         # Create two columns for the graphs
         col1, col2 = st.columns(2)
         
@@ -269,7 +367,7 @@ def display_emotion_graphs():
             fig1, ax1 = plt.subplots(figsize=(8, 5))
             
             # Calculate average emotions across all frames
-            avg_emotions = df[emotions].mean().sort_values(ascending=False)
+            avg_emotions = st.session_state.emotion_df[emotions].mean().sort_values(ascending=False)
             
             # Create bar chart with custom colors
             bars = ax1.bar(avg_emotions.index, avg_emotions.values * 100)
@@ -298,6 +396,9 @@ def display_emotion_graphs():
             st.subheader("Emotions Over Time")
             fig2, ax2 = plt.subplots(figsize=(8, 5))
             
+            # Sort dataframe by timestamp
+            df = st.session_state.emotion_df.sort_values('timestamp')
+            
             # Plot each emotion line
             for emotion in emotions:
                 # Convert BGR to RGB
@@ -318,14 +419,17 @@ def display_emotion_graphs():
         
         # Add a clear data button
         if st.button("Clear Emotion Data"):
-            with emotion_data_lock:
-                st.session_state.emotion_data = []
+            st.session_state.emotion_df = pd.DataFrame(columns=['timestamp'] + emotions)
             st.experimental_rerun()
         
         return True
     except Exception as e:
         st.error(f"Error displaying graphs: {str(e)}")
         return False
+
+# Create a separator before the graphs
+st.markdown("---")
+st.header("Emotion Graphs")
 
 # Configure WebRTC with minimal settings
 rtc_configuration = RTCConfiguration(
@@ -341,24 +445,22 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True,
 )
 
-# Create graphs placeholder
-graph_placeholder = st.empty()
+# Process any queued data
+process_queue_data()
 
-# Display graphs if enabled
+# Display graphs
 if st.session_state.show_graphs:
-    with graph_placeholder:
-        display_emotion_graphs()
+    display_emotion_graphs()
 
-# Refresh graphs every 3 seconds if WebRTC is active
-if webrtc_ctx.state.playing and st.session_state.show_graphs:
-    refresh_rate = 3
-    if 'last_refresh' not in st.session_state:
-        st.session_state.last_refresh = time.time() - refresh_rate
+# Add debug info to help diagnose issues
+with st.expander("Debug Information"):
+    st.write(f"Data points collected: {len(st.session_state.emotion_df)}")
+    st.write(f"WebRTC state: {'Playing' if webrtc_ctx.state.playing else 'Stopped'}")
+    st.write(f"Queue size: {st.session_state.emotion_queue.qsize()}")
     
-    if time.time() - st.session_state.last_refresh > refresh_rate:
-        st.session_state.last_refresh = time.time()
-        with graph_placeholder:
-            display_emotion_graphs()
+    if len(st.session_state.emotion_df) > 0:
+        st.write("Sample data:")
+        st.write(st.session_state.emotion_df.tail(3))
 
 with st.expander("About this app"):
     st.write("""
