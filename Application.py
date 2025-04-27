@@ -5,7 +5,9 @@ import numpy as np
 import torch.nn.functional as F
 from torchvision import transforms
 import av
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration, RTCAppState
+from streamlit_webrtc import RTCWE
+
 from models import PerformanceModel
 from emotionoverlay import EmotionOverlay
 from gifoverlay import GifEmotionOverlay
@@ -359,6 +361,9 @@ rtc_configuration = RTCConfiguration(
 status_placeholder = st.empty()
 
 # Display WebRTC component
+
+
+# Display WebRTC component
 webrtc_ctx = webrtc_streamer(
     key="facial-emotion",
     video_processor_factory=VideoProcessor,
@@ -367,40 +372,26 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True,
 )
 
-# Display debug info if enabled
-if debug_mode and st.session_state.debug_info:
-    st.sidebar.info(f"Debug info: {st.session_state.debug_info}")
-
-# Check if the camera state has changed
-if webrtc_ctx.state.playing:
-    st.session_state.was_playing = True
-    status_placeholder.info("Camera is active. Move your face into view for emotion detection.")
-    
-# If camera was on and now it's off, automatically show graphs
-if st.session_state.was_playing and not webrtc_ctx.state.playing:
-    st.session_state.was_playing = False
-    
-    if st.session_state.face_detected:
-        status_placeholder.success("Camera stopped. Generating emotion graphs...")
+# ✅ NEW: Automatically show graphs when camera is stopped
+if webrtc_ctx and webrtc_ctx.state == RTCAppState.STOPPED:
+    if not st.session_state.show_graphs:
         st.session_state.show_graphs = True
-        st.experimental_rerun()
-    else:
-        status_placeholder.warning("Camera stopped, but no faces were detected. No data to display.")
+        st.experimental_rerun()  # Force rerun to immediately display graphs
 
-# Add generate graphs button that's always visible
+# Manual fallback: "Generate Emotion Graphs" button (still available)
 if st.button("Generate Emotion Graphs"):
     st.session_state.show_graphs = True
 
-# Show graphs when requested and we have data
+# Show graphs if ready and we have data
 if st.session_state.show_graphs:
     graphs_displayed = display_emotion_graphs()
     
-    # Add a button to clear data if graphs were displayed
+    # Add button to clear data
     if graphs_displayed and st.button("Clear Emotion Data"):
         st.session_state.emotion_data = []
         st.session_state.show_graphs = False
-        st.session_state.face_detected = False
         st.experimental_rerun()
+
 
 # Display data count
 if st.session_state.emotion_data:
