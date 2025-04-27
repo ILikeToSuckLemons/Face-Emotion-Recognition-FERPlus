@@ -24,6 +24,9 @@ if 'emotion_data' not in st.session_state:
     
 if 'show_graphs' not in st.session_state:
     st.session_state.show_graphs = False
+    
+if 'was_playing' not in st.session_state:
+    st.session_state.was_playing = False
 
 # Load model only once
 @st.cache_resource
@@ -89,6 +92,9 @@ class VideoProcessor(VideoProcessorBase):
         self.processing_fps = 0
         self.emotion_history = []
         self.start_time = time.time()
+        # Load existing emotion data if available
+        if st.session_state.emotion_data:
+            self.emotion_history = st.session_state.emotion_data
         
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -270,6 +276,15 @@ webrtc_ctx = webrtc_streamer(
     async_processing=True,
 )
 
+# Check if the camera state has changed
+if webrtc_ctx.state.playing:
+    st.session_state.was_playing = True
+elif st.session_state.was_playing and not webrtc_ctx.state.playing:
+    # Camera was just stopped, automatically show graphs
+    st.session_state.was_playing = False
+    st.session_state.show_graphs = True
+    st.experimental_rerun()
+
 # Add generate graphs button that's always visible
 if st.button("Generate Emotion Graphs"):
     st.session_state.show_graphs = True
@@ -284,6 +299,10 @@ if st.session_state.show_graphs:
         st.session_state.show_graphs = False
         st.experimental_rerun()
 
+# Display data count
+if st.session_state.emotion_data:
+    st.sidebar.success(f"Data points collected: {len(st.session_state.emotion_data)}")
+
 with st.expander("About this app"):
     st.write("""
     This app performs real-time facial emotion recognition using a trained deep learning model.
@@ -291,9 +310,9 @@ with st.expander("About this app"):
     
     The app overlays emotion-specific GIFs and displays the probability for each emotion.
     
-    Press the "Generate Emotion Graphs" button anytime to see:
-    1. A bar chart of the total emotion distribution
-    2. A line graph showing how emotions changed over time
+    The app will automatically generate emotion graphs when you stop the camera. You can also:
+    - Press the "Generate Emotion Graphs" button anytime to see the current results
+    - Clear collected data with the "Clear Emotion Data" button
     
     For better performance, adjust the settings in the sidebar:
     - Lower the face detection frequency
