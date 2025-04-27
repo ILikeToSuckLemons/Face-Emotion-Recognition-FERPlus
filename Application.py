@@ -272,8 +272,10 @@ webrtc_ctx = webrtc_streamer(
 
 # Add generate graphs button that's always visible
 # If webcam session has ended, automatically show graphs
-if not webrtc_ctx.state.playing and len(st.session_state.emotion_data) > 0:
+# Automatically show graphs when webcam is stopped
+if webrtc_ctx.state in (webrtc_ctx.State.ENDED, webrtc_ctx.State.STOPPED) and len(st.session_state.emotion_data) > 0:
     st.session_state.show_graphs = True
+
 
 
 # Show graphs when requested and we have data
