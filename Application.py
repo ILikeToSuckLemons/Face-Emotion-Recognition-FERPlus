@@ -92,11 +92,13 @@ class VideoProcessor(VideoProcessorBase):
         self.processing_fps = 0
         self.emotion_history = []
         self.start_time = time.time()
-        # Load existing emotion data if available
-        if st.session_state.emotion_data:
-            self.emotion_history = st.session_state.emotion_data
+        # We'll update the emotion history in the first frame
         
     def recv(self, frame):
+        # Initialize emotion history from session state on first frame
+        if not self.emotion_history and len(st.session_state.emotion_data) > 0:
+            self.emotion_history = st.session_state.emotion_data.copy()
+        
         img = frame.to_ndarray(format="bgr24")
         
         # Downscale image for processing (improves performance)
@@ -279,8 +281,9 @@ webrtc_ctx = webrtc_streamer(
 # Check if the camera state has changed
 if webrtc_ctx.state.playing:
     st.session_state.was_playing = True
-elif st.session_state.was_playing and not webrtc_ctx.state.playing:
-    # Camera was just stopped, automatically show graphs
+    
+# If camera was on and now it's off, automatically show graphs
+if st.session_state.was_playing and not webrtc_ctx.state.playing:
     st.session_state.was_playing = False
     st.session_state.show_graphs = True
     st.experimental_rerun()
