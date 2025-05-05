@@ -38,11 +38,17 @@ Here are the examples of the output:
 | ![Contempt](images/Output/Contempt.png) | ![Neutral](images/Output/Neutral.png) | ![Joy](images/Output/joy.png) | ![Sad](images/Output/sad.png) |
 
 
+It also tracks multiple faces :
+
+ ![MultipleFaces](images/MultipleFace.png) 
+
 Here are the examples of the output of the gif version:
 
 | Video | 
 |----------|
 | ![VideoGIF](images/Output/FER.gif) |
+
+
 
 | Graph Type | Preview |
 |------------|---------|
