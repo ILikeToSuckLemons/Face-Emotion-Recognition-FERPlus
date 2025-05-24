@@ -6,6 +6,7 @@ The FER2013plus dataset is better than the FER2013 since the emotions are soft-l
 If you want to yield similar results to this project, I suggest downloading the 2 datasets before continuing.
 
 FER2013.csv = This file contains only 7 emotions which are happiness, sadness, surprise, anger, disgust, fear, and neutral
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 FER2013plus = This file has additional emotions called "contempt". On top of that, the emotion scores for each image are distributed. Meaning that there will not be a definite emotion.
 
 For Example, this is the FER2013 labels:
@@ -37,11 +38,17 @@ Here are the examples of the output:
 | ![Contempt](images/Output/Contempt.png) | ![Neutral](images/Output/Neutral.png) | ![Joy](images/Output/joy.png) | ![Sad](images/Output/sad.png) |
 
 
+It also tracks multiple faces :
+
+ ![MultipleFaces](images/MultipleFace.png) 
+
 Here are the examples of the output of the gif version:
 
 | Video | 
 |----------|
 | ![VideoGIF](images/Output/FER.gif) |
+
+
 
 | Graph Type | Preview |
 |------------|---------|
@@ -50,7 +57,9 @@ Here are the examples of the output of the gif version:
 
 
 
-Not too shabby if you ask me 😂🤣😭💪
+Not too shabby if you ask me 😂🤣😭💪  
+you can find my project and use it immediately in this link:  
+[Face Emotion Recognition App](https://face-emotion-recognition-ferplus-2xwcjgvcgafrku8hmsbyzm.streamlit.app/)
 
 
 
