@@ -1,7 +1,7 @@
 streamlit
 opencv-python-headless
-torch
-torchvision
+torch                     
+torchaudio               
 matplotlib
 numpy
 Pillow
